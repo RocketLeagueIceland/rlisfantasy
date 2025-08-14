@@ -146,7 +146,7 @@ export default async function TransferHub({
 
       <div className="grid lg:grid-cols-[380px,1fr] gap-6">
         {/* Sidebar: Team */}
-        <aside className="lg:sticky lg:top-6 h-fit rounded-2xl border border-neutral-800 p-4 space-y-4">
+        <aside className="lg:top-6 h-fit rounded-2xl border border-neutral-800 p-4 space-y-4">
           <div className="flex items-baseline justify-between">
             <h2 className="font-medium">Liðið mitt</h2>
           </div>
