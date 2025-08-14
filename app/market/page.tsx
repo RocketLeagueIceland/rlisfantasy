@@ -5,7 +5,9 @@ import { revalidatePath } from 'next/cache'
 import { BuyButton } from '@/components/buy-button'
 import { SellButton } from '@/components/sell-button'
 
+// -----------------------------
 // Server Actions
+// -----------------------------
 export async function buyAction(prev: any, formData: FormData) {
   'use server'
   const session = await getServerSession(authOptions)
@@ -67,17 +69,11 @@ export async function sellAction(prev: any, formData: FormData) {
   if (!openWeek) return { ok: false, error: 'Markaður er læstur.' }
 
   const team = await prisma.team.findUnique({ where: { userId } })
-  const tp = await prisma.teamPlayer.findUnique({
-    where: { id: teamPlayerId },
-    include: { player: true },
-  })
+  const tp = await prisma.teamPlayer.findUnique({ where: { id: teamPlayerId }, include: { player: true } })
   if (!team || !tp) return { ok: false, error: 'Leikmaður fannst ekki.' }
 
   await prisma.$transaction([
-    prisma.team.update({
-      where: { id: team.id },
-      data: { budgetSpent: { decrement: tp.pricePaid } },
-    }),
+    prisma.team.update({ where: { id: team.id }, data: { budgetSpent: { decrement: tp.pricePaid } } }),
     prisma.teamPlayer.delete({ where: { id: tp.id } }),
   ])
 
@@ -86,17 +82,31 @@ export async function sellAction(prev: any, formData: FormData) {
   return { ok: true }
 }
 
-export default async function MarketAndTeam() {
+// -----------------------------
+// Combined page: Liðið mitt + Markaður
+// -----------------------------
+export default async function TransferHub({
+  searchParams,
+}: {
+  searchParams: { q?: string; sort?: 'price_desc' | 'price_asc' }
+}) {
   const session = await getServerSession(authOptions)
   if (!session?.user) return <div>Þú þarft að vera skráður inn.</div>
 
   const userId = (session.user as any).id
+  const q = searchParams?.q?.trim()
+  const sort = (searchParams?.sort as 'price_desc' | 'price_asc') || 'price_desc'
+
   const [team, players, openWeek] = await Promise.all([
     prisma.team.findUnique({
       where: { userId },
       include: { members: { include: { player: true } } },
     }),
-    prisma.player.findMany({ orderBy: { price: 'desc' } }),
+    prisma.player.findMany({
+      where: q ? { name: { contains: q, mode: 'insensitive' } } : undefined,
+      include: { rlTeam: true },
+      orderBy: sort === 'price_asc' ? { price: 'asc' } : { price: 'desc' },
+    }),
     prisma.week.findFirst({ where: { isLocked: false }, orderBy: { number: 'asc' } }),
   ])
 
@@ -117,83 +127,123 @@ export default async function MarketAndTeam() {
   const locked = !openWeek
 
   return (
-    <div className="grid lg:grid-cols-[360px,1fr] gap-6">
-      {/* Sidebar: Team */}
-      <aside className="lg:sticky lg:top-6 h-fit rounded-2xl border border-neutral-800 p-4 space-y-4">
-        <div className="flex items-baseline justify-between">
-          <h2 className="font-semibold">Liðið mitt</h2>
-          <span className="text-sm text-neutral-400">Sjóður: {budgetLeft} cr</span>
-        </div>
-        <div>
-          <h3 className="text-sm text-neutral-300 mb-2">Virkir (1–3)</h3>
-          <ul className="space-y-2">
-            {team.members
-              .filter(m => m.isActive)
-              .sort((a, b) => a.activeOrder! - b.activeOrder!)
-              .map(m => (
-                <li key={m.id} className="flex items-center justify-between">
-                  <div className="truncate">
-                    <span className="text-neutral-400 mr-1">{m.activeOrder}.</span>
-                    {m.player.name}
-                  </div>
-                  <SellButton action={sellAction} teamPlayerId={m.id} />
-                </li>
-              ))}
-          </ul>
-        </div>
-        <div>
-          <h3 className="text-sm text-neutral-300 mt-4 mb-2">Varamenn (1–3)</h3>
-          <ul className="space-y-2">
-            {team.members
-              .filter(m => !m.isActive)
-              .sort((a, b) => a.benchOrder! - b.benchOrder!)
-              .map(m => (
-                <li key={m.id} className="flex items-center justify-between">
-                  <div className="truncate">
-                    <span className="text-neutral-400 mr-1">{m.benchOrder}.</span>
-                    {m.player.name}
-                  </div>
-                  <SellButton action={sellAction} teamPlayerId={m.id} />
-                </li>
-              ))}
-          </ul>
-        </div>
-      </aside>
-
-      {/* Market */}
-      <section>
-        <div className="flex items-center justify-between mb-4">
-          <h1 className="text-2xl font-semibold">Markaður</h1>
-          <div className="text-sm text-neutral-400">Eftir: {budgetLeft} cr</div>
-        </div>
-
-        {locked && (
-          <div className="mb-4 rounded-lg border border-yellow-700/40 bg-yellow-500/10 text-yellow-200 text-sm px-3 py-2">
-            Markaður er læstur þessa stundina.
+    <div className="space-y-6">
+      {/* Hero / header */}
+      <div className="rounded-2xl border border-neutral-800 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-neutral-900 via-neutral-950 to-neutral-950 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold">Flutningar</h1>
+            <p className="text-sm text-neutral-400">Sameinað yfirlit yfir liðið þitt og markaðinn.</p>
           </div>
-        )}
+          <div className="flex items-center gap-2">
+            <span className="text-xs rounded-full border border-neutral-700 px-3 py-1 text-neutral-300">Sjóður: {budgetLeft} cr</span>
+            {locked && (
+              <span className="text-xs rounded-full border border-yellow-700/40 bg-yellow-500/10 text-yellow-200 px-3 py-1">Markaður læstur</span>
+            )}
+          </div>
+        </div>
+      </div>
 
-        <ul className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {players.map(p => {
-            const cannotAfford = p.price > budgetLeft
-            return (
-              <li key={p.id} className="border border-neutral-800 rounded-xl p-4">
-                <div className="font-medium truncate">{p.name}</div>
-                <div className="text-sm text-neutral-400">Verð: {p.price} cr</div>
-                <BuyButton
-                  playerId={p.id}
-                  action={buyAction}
-                  owned={owned.has(p.id)}
-                  disabled={cannotAfford || locked}
-                />
-                {cannotAfford && !owned.has(p.id) && (
-                  <p className="text-xs text-red-400 mt-2">Ekki nægur sjóður.</p>
-                )}
-              </li>
-            )
-          })}
-        </ul>
-      </section>
+      <div className="grid lg:grid-cols-[380px,1fr] gap-6">
+        {/* Sidebar: Team */}
+        <aside className="lg:sticky lg:top-6 h-fit rounded-2xl border border-neutral-800 p-4 space-y-4">
+          <div className="flex items-baseline justify-between">
+            <h2 className="font-medium">Liðið mitt</h2>
+          </div>
+          <div>
+            <h3 className="text-sm text-neutral-300 mb-2">Virkir (1–3)</h3>
+            <ul className="space-y-2">
+              {team.members
+                .filter(m => m.isActive)
+                .sort((a, b) => a.activeOrder! - b.activeOrder!)
+                .map(m => (
+                  <li key={m.id} className="flex items-center justify-between rounded-lg border border-neutral-800 px-3 py-2">
+                    <div className="truncate">
+                      <span className="text-neutral-400 mr-1">{m.activeOrder}.</span>
+                      {m.player.name}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {m.role && (
+                        <span className="text-[10px] uppercase tracking-wide text-neutral-300 rounded border border-neutral-700 px-1.5 py-0.5">{m.role}</span>
+                      )}
+                      <SellButton action={sellAction} teamPlayerId={m.id} />
+                    </div>
+                  </li>
+                ))}
+            </ul>
+          </div>
+          <div>
+            <h3 className="text-sm text-neutral-300 mt-4 mb-2">Varamenn (1–3)</h3>
+            <ul className="space-y-2">
+              {team.members
+                .filter(m => !m.isActive)
+                .sort((a, b) => a.benchOrder! - b.benchOrder!)
+                .map(m => (
+                  <li key={m.id} className="flex items-center justify-between rounded-lg border border-neutral-800 px-3 py-2">
+                    <div className="truncate">
+                      <span className="text-neutral-400 mr-1">{m.benchOrder}.</span>
+                      {m.player.name}
+                    </div>
+                    <SellButton action={sellAction} teamPlayerId={m.id} />
+                  </li>
+                ))}
+            </ul>
+          </div>
+        </aside>
+
+        {/* Market */}
+        <section className="space-y-4">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <h2 className="text-xl font-medium">Markaður</h2>
+            <form className="flex flex-wrap items-center gap-2" method="get">
+              <input
+                name="q"
+                defaultValue={q || ''}
+                placeholder="Leita að leikmanni…"
+                className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2 w-56"
+              />
+              <select name="sort" defaultValue={sort} className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2">
+                <option value="price_desc">Dýrast fyrst</option>
+                <option value="price_asc">Ódýrast fyrst</option>
+              </select>
+              <button className="border border-neutral-700 rounded px-3 py-2 text-sm">Sía</button>
+            </form>
+          </div>
+
+          {locked && (
+            <div className="rounded-lg border border-yellow-700/40 bg-yellow-500/10 text-yellow-200 text-sm px-3 py-2">
+              Markaður er læstur þessa stundina.
+            </div>
+          )}
+
+          <ul className="grid sm:grid-cols-2 xl:grid-cols-3 gap-4">
+            {players.map(p => {
+              const cannotAfford = p.price > budgetLeft
+              const subtitle = p.rlTeam?.short ? p.rlTeam.short : p.rlTeam?.name
+              return (
+                <li key={p.id} className="rounded-xl border border-neutral-800 p-4 hover:border-neutral-600 transition">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-medium truncate">{p.name}</div>
+                      <div className="text-xs text-neutral-400 truncate">{subtitle ?? '—'}</div>
+                    </div>
+                    <div className="text-sm text-neutral-300 whitespace-nowrap">{p.price} cr</div>
+                  </div>
+                  <BuyButton
+                    playerId={p.id}
+                    action={buyAction}
+                    owned={owned.has(p.id)}
+                    disabled={cannotAfford || locked}
+                  />
+                  {cannotAfford && !owned.has(p.id) && (
+                    <p className="text-xs text-red-400 mt-2">Ekki nægur sjóður.</p>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        </section>
+      </div>
     </div>
   )
 }
