@@ -1,36 +1,70 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
-
-## Getting Started
-
-First, run the development server:
-
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```
+.
+├─ app/
+│  ├─ layout.tsx
+│  ├─ globals.css
+│  ├─ page.tsx                      # Landing (IS)
+│  ├─ how-to-play/page.tsx          # Leiðbeiningar + reglur
+│  ├─ dashboard/page.tsx            # Liðið mitt (requires auth)
+│  ├─ market/page.tsx               # Kaupa/Selja leikmenn
+│  ├─ leaderboard/page.tsx          # Stigatafla
+│  ├─ admin/
+│  │  ├─ page.tsx                   # Admin heim
+│  │  ├─ players/page.tsx           # Stjórna leikmönnum
+│  │  ├─ weeks/page.tsx             # Stjórna vikum & læsingum
+│  │  └─ ingest/page.tsx            # Hlaða inn tölfræði (CSV/JSON)
+│  └─ api/
+│     ├─ auth/[...nextauth]/route.ts
+│     ├─ market/buy/route.ts
+│     ├─ market/sell/route.ts
+│     ├─ team/reorder/route.ts
+│     ├─ admin/ingest/route.ts
+│     └─ compute/rebuild-week/route.ts
+├─ components/
+│  ├─ nav.tsx
+│  ├─ auth-button.tsx
+│  ├─ team-editor.tsx
+│  ├─ lineup-card.tsx
+│  ├─ player-card.tsx
+│  ├─ leaderboard-table.tsx
+│  └─ forms/
+│     └─ select.tsx
+├─ lib/
+│  ├─ auth.ts
+│  ├─ prisma.ts
+│  ├─ config.ts
+│  ├─ scoring.ts
+│  ├─ substitutions.ts
+│  ├─ fantasy.ts
+│  └─ utils.ts
+├─ prisma/
+│  ├─ schema.prisma
+│  └─ seed.ts
+├─ public/
+│  └─ logo.svg
+├─ middleware.ts
+├─ next.config.ts
+├─ package.json
+├─ tsconfig.json
+├─ vercel.json
+└─ README.md
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+README (ops notes)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Database: Azure SQL (MSSQL) tested with Prisma provider sqlserver. Ensure your firewall allows Vercel’s egress IPs or use Azure Private Link.
 
-## Learn More
+Auth: Add Discord app (redirect URI → https://<your-domain>/api/auth/callback/discord). Email requires a real SMTP.
 
-To learn more about Next.js, take a look at the following resources:
+Market lock: Flip Week.isLocked and set firstBroadcastAt/unlockedAt. You can add a tiny check on market routes to ensure now < firstBroadcastAt - 60m or now > unlockedAt.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+One transfer per week: Track in a new model Transfer with unique constraint @@unique([teamId, weekId]).
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Admin: Gate pages with session.user.role === 'ADMIN'.
 
-## Deploy on Vercel
+Security: Enforce server actions on the server only, validate inputs with zod.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Pricing: Prices (Player.price) are admin‑controlled and can be adjusted weekly.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Icelandic copy: The app ships with Icelandic labels; adjust in app/ as needed.
