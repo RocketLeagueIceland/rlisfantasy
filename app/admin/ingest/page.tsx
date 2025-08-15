@@ -2,6 +2,7 @@ import { prisma } from '@/lib/prisma'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { revalidatePath } from 'next/cache'
+import { rebuildWeekScores } from '@/lib/fantasy'
 
 async function requireAdmin() {
   const session = await getServerSession(authOptions)
@@ -32,10 +33,9 @@ export async function importBallchasing(formData: FormData) {
   const token = process.env.BALLCHASING_API_TOKEN
   if (!token) return { ok: false, message: 'Settu BALLCHASING_API_TOKEN í umhverfisbreytur.' }
 
-  // Fetch group stats from Ballchasing
+  // Fetch group from Ballchasing
   const res = await fetch(`https://ballchasing.com/api/groups/${groupId}`, {
     headers: { Authorization: token },
-    // 60s timeout is fine here
     next: { revalidate: 0 },
   })
   if (!res.ok) return { ok: false, message: `Ballchasing ${res.status}` }
@@ -44,7 +44,6 @@ export async function importBallchasing(formData: FormData) {
   const players = (data.players || []) as any[]
   if (!players.length) return { ok: false, message: 'Engir leikmenn fundust í hópnum.' }
 
-  // Build lookup by alias and by exact name
   const names = players.map((p) => String(p.name))
   const [byName, aliases] = await Promise.all([
     prisma.player.findMany({ where: { name: { in: names } }, select: { id: true, name: true } }),
@@ -54,51 +53,57 @@ export async function importBallchasing(formData: FormData) {
   const nameMap = new Map(byName.map((p) => [p.name.toLowerCase(), p.id]))
   const aliasMap = new Map(aliases.map((a) => [a.alias.toLowerCase(), a.player.id]))
 
-  const matched: { playerId: string; goals: number; assists: number; saves: number; shots: number; score: number; games: number }[] = []
+  const upserts: {
+    playerId: string
+    weekId: string
+    goals: number
+    assists: number
+    saves: number
+    shots: number
+    score: number
+    games: number
+  }[] = []
   const unmatched: string[] = []
+
+  const round2 = (x: number) => Math.round(x * 100) / 100
 
   for (const p of players) {
     const lower = String(p.name || '').toLowerCase()
     const playerId = nameMap.get(lower) || aliasMap.get(lower)
-    if (!playerId) {
-      unmatched.push(p.name)
-      continue
-    }
+    if (!playerId) { unmatched.push(p.name); continue }
+
     const core = p.cumulative?.core || {}
-    const demo = p.cumulative?.demo || {}
-    matched.push({
-      playerId,
-      goals: Math.round(core.goals || 0),
-      assists: Math.round(core.assists || 0),
-      saves: Math.round(core.saves || 0),
-      shots: Math.round(core.shots || 0),
-      score: Math.round(core.score || 0),
-      games: Math.max(1, Math.round(p.cumulative?.games || 1)),
-    })
+    const games = Math.max(1, Math.round(p.cumulative?.games || 1))
+
+    // Convert TOTALS -> AVERAGES per game
+    const goals  = round2((core.goals  || 0) / games)
+    const assists= round2((core.assists|| 0) / games)
+    const saves  = round2((core.saves  || 0) / games)
+    const shots  = round2((core.shots  || 0) / games)
+    const score  = round2((core.score  || 0) / games)
+
+    upserts.push({ playerId, weekId, goals, assists, saves, shots, score, games })
   }
 
-  // Replace existing stats for those players in the selected week
-  const ids = matched.map((m) => m.playerId)
-  await prisma.$transaction([
-    prisma.playerGameStat.deleteMany({ where: { weekId, playerId: { in: ids } } }),
-    // Create ONE aggregated row per player (totals). Our scoring is linear, so this preserves totals.
-    prisma.playerGameStat.createMany({
-      data: matched.map((m) => ({
-        playerId: m.playerId,
-        weekId,
-        goals: m.goals,
-        assists: m.assists,
-        saves: m.saves,
-        shots: m.shots,
-        score: m.score,
-      })),
-      skipDuplicates: true,
-    }),
-  ])
+  // One row per player/week → delete existing then insert
+  // (we have @@unique([playerId, weekId]))
+  const ids = upserts.map(u => u.playerId)
+  await prisma.$transaction(async (tx) => {
+    if (ids.length) await tx.playerGameStat.deleteMany({ where: { weekId, playerId: { in: ids } } })
+    if (upserts.length) await tx.playerGameStat.createMany({ data: upserts })
+  })
+
+  // Recompute leaderboard for that week number
+  const week = await prisma.week.findUnique({ where: { id: weekId }, select: { number: true } })
+  if (week?.number != null) {
+    // defer to API or call directly if you prefer:
+    // await rebuildWeekScores(week.number)
+  }
 
   revalidatePath('/leaderboard')
-  return { ok: true, message: `Hlaðið inn fyrir ${matched.length} leikmenn. Ómappað: ${unmatched.join(', ') || '—'}` }
+  return { ok: true, message: `Vistað með meðaltölum fyrir ${upserts.length} leikmenn. Ómappað: ${unmatched.join(', ') || '—'}` }
 }
+
 
 export async function ingestCsv(formData: FormData) {
   'use server'
@@ -106,56 +111,71 @@ export async function ingestCsv(formData: FormData) {
   const weekId = String(formData.get('weekId') || '')
   const file = formData.get('file') as File | null
   if (!file) return { ok: false, message: 'Vantar CSV skrá.' }
+
   const text = await file.text()
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+  if (!lines.length) return { ok: false, message: 'Skrá tóm.' }
 
+  const header = lines.shift()!.toLowerCase()
+  const cols = header.split(',').map(s => s.trim())
+  const idx = (k: string) => cols.indexOf(k)
 
-  // CSV columns: player,goals,assists,saves,shots,score
-  const header = lines.shift() || ''
-  const cols = header.split(',').map((c) => c.trim().toLowerCase())
-  const required = ['player', 'goals', 'assists', 'saves', 'shots', 'score']
-  if (required.some((r) => !cols.includes(r))) return { ok: false, message: 'Hauslína þarf: player,goals,assists,saves,shots,score' }
+  // We support two formats:
+  // A) averages: player,goals,assists,saves,shots,score
+  // B) totals + games: player,goals,assists,saves,shots,score,games
+  const hasGames = idx('games') >= 0
 
-  const get = (arr: string[], key: string) => arr[cols.indexOf(key)]
-
-  const rows: { player: string; goals: number; assists: number; saves: number; shots: number; score: number }[] = []
-  for (const l of lines) {
-    const arr = l.split(',')
-    if (arr.length < cols.length) continue
-    rows.push({
-      player: get(arr, 'player'),
-      goals: Number(get(arr, 'goals') || 0),
-      assists: Number(get(arr, 'assists') || 0),
-      saves: Number(get(arr, 'saves') || 0),
-      shots: Number(get(arr, 'shots') || 0),
-      score: Number(get(arr, 'score') || 0),
-    })
+  const need = ['player','goals','assists','saves','shots','score']
+  if (need.some(n => idx(n) < 0)) {
+    return { ok: false, message: 'Hauslína þarf: player,goals,assists,saves,shots,score[,games]' }
   }
 
-  const names = rows.map((r) => r.player)
+  const rows = lines.map(l => l.split(','))
+  const names = rows.map(r => r[idx('player')])
   const [byName, aliases] = await Promise.all([
     prisma.player.findMany({ where: { name: { in: names } }, select: { id: true, name: true } }),
     prisma.playerAlias.findMany({ where: { alias: { in: names } }, include: { player: true } }),
   ])
-  const nameMap = new Map(byName.map((p) => [p.name.toLowerCase(), p.id]))
-  const aliasMap = new Map(aliases.map((a) => [a.alias.toLowerCase(), a.player.id]))
+  const nameMap = new Map(byName.map(p => [p.name.toLowerCase(), p.id]))
+  const aliasMap = new Map(aliases.map(a => [a.alias.toLowerCase(), a.player.id]))
 
-  const creates = [] as any[]
-  const unmatched = [] as string[]
+  const round2 = (x: number) => Math.round(x * 100) / 100
+
+  const upserts: any[] = []
+  const unmatched: string[] = []
 
   for (const r of rows) {
-    const id = nameMap.get(r.player.toLowerCase()) || aliasMap.get(r.player.toLowerCase())
-    if (!id) { unmatched.push(r.player); continue }
-    creates.push({ playerId: id, weekId, goals: r.goals, assists: r.assists, saves: r.saves, shots: r.shots, score: r.score })
+    const playerName = String(r[idx('player')] || '').trim()
+    const id = nameMap.get(playerName.toLowerCase()) || aliasMap.get(playerName.toLowerCase())
+    if (!id) { unmatched.push(playerName); continue }
+
+    const g  = Number(r[idx('goals')]   || 0)
+    const a  = Number(r[idx('assists')] || 0)
+    const sv = Number(r[idx('saves')]   || 0)
+    const sh = Number(r[idx('shots')]   || 0)
+    const sc = Number(r[idx('score')]   || 0)
+    const games = hasGames ? Math.max(1, Number(r[idx('games')] || 1)) : 1
+
+    // If games present → convert totals→avg; else treat as averages directly
+    const goals   = hasGames ? round2(g / games)  : round2(g)
+    const assists = hasGames ? round2(a / games)  : round2(a)
+    const saves   = hasGames ? round2(sv / games) : round2(sv)
+    const shots   = hasGames ? round2(sh / games) : round2(sh)
+    const score   = hasGames ? round2(sc / games) : round2(sc)
+
+    upserts.push({ playerId: id, weekId, goals, assists, saves, shots, score, games })
   }
 
-  await prisma.$transaction([
-    prisma.playerGameStat.deleteMany({ where: { weekId, playerId: { in: creates.map((c) => c.playerId) } } }),
-    prisma.playerGameStat.createMany({ data: creates, skipDuplicates: true }),
-  ])
+  await prisma.$transaction(async (tx) => {
+    if (upserts.length) {
+      await tx.playerGameStat.deleteMany({ where: { weekId, playerId: { in: upserts.map(u => u.playerId) } } })
+      await tx.playerGameStat.createMany({ data: upserts })
+    }
+  })
 
+  // Optionally recompute here as well (same as above)
   revalidatePath('/leaderboard')
-  return { ok: true, message: `CSV: ${creates.length} raðir. Ómappað: ${unmatched.join(', ') || '—'}` }
+  return { ok: true, message: `CSV vistað með meðaltölum fyrir ${upserts.length} leikmenn. Ómappað: ${unmatched.join(', ') || '—'}` }
 }
 
 export async function addAlias(formData: FormData) {

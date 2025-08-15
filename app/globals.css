@@ -24,3 +24,36 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Add near the end of globals.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Pointer cursors everywhere there's a buttony thing */
+@layer base {
+  button,
+  [type='button'],
+  [type='submit'],
+  [role='button'] {
+    @apply cursor-pointer;
+  }
+
+  /* Nice disabled state */
+  button:disabled,
+  [aria-disabled='true'] {
+    @apply cursor-not-allowed opacity-60;
+  }
+}
+
+/* Optional: tiny button utility you can re-use */
+@layer components {
+  .btn {
+    @apply inline-flex items-center gap-2 rounded-md border border-neutral-700
+           px-3 py-1.5 text-sm transition-colors hover:bg-neutral-800/40
+           cursor-pointer;
+  }
+  .btn-primary {
+    @apply bg-white text-black border-transparent hover:bg-neutral-200;
+  }
+}
