@@ -16,7 +16,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <Link href="/how-to-play">Hvernig virkar?</Link>
                 <Link href="/leaderboard">Stigatafla</Link>
                 <Link href="/dashboard">Liðið mitt</Link>
-                <Link href="/market">Markaður</Link>
                 <AdminLink />
                 <AuthButton />
               </nav>

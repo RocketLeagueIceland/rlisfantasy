@@ -1,23 +1,23 @@
-import { POINTS, ROLE_BONUS } from './config'
-import type { RoleOnField } from './config'
+import { POINTS, POSITION_BONUS_MULTIPLIER, type RoleOnField } from './config'
 
-type StatLine = { goals: number; assists: number; saves: number; shots: number; demos: number }
+type StatLine = { goals: number; assists: number; saves: number; shots: number; score?: number }
 
 export function rawPoints(s: StatLine) {
   return (
-    s.goals * POINTS.goal +
-    s.assists * POINTS.assist +
-    s.saves * POINTS.save +
-    s.shots * POINTS.shot +
-    s.demos * POINTS.demo
+    (s.goals ?? 0) * POINTS.goal +
+    (s.assists ?? 0) * POINTS.assist +
+    (s.saves ?? 0) * POINTS.save +
+    (s.shots ?? 0) * POINTS.shot +
+    (s.score ?? 0) * POINTS.score
   )
 }
 
-export function withRoleBonus(base: StatLine, role: RoleOnField | null | undefined) {
-  if (!role) return rawPoints(base)
-  let total = rawPoints(base)
-  if (role === 'SHOOTER') total += base.goals * POINTS.goal // +100% of goal points
-  if (role === 'CREATOR') total += base.assists * POINTS.assist
-  if (role === 'WALL') total += base.saves * POINTS.save
-  return total
+export function withPositionBonus(base: StatLine, role: RoleOnField | null | undefined) {
+  const basePts = rawPoints(base)
+  if (!role || POSITION_BONUS_MULTIPLIER === 1) return basePts
+  const mult = POSITION_BONUS_MULTIPLIER - 1
+  if (role === 'STRIKER') return basePts + mult * (base.goals ?? 0) * POINTS.goal
+  if (role === 'MIDFIELD') return basePts + mult * (base.assists ?? 0) * POINTS.assist
+  if (role === 'DEFENSE') return basePts + mult * (base.saves ?? 0) * POINTS.save
+  return basePts
 }

@@ -2,23 +2,11 @@ import { prisma } from '@/lib/prisma'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { revalidatePath } from 'next/cache'
+import { rebuildWeekScores } from '@/lib/fantasy'
 
 async function requireAdmin() {
   const session = await getServerSession(authOptions)
   if ((session?.user as any)?.role !== 'ADMIN') throw new Error('Forbidden')
-  return session
-}
-
-export async function createWeek() {
-  'use server'
-  await requireAdmin()
-  const latest = await prisma.week.findFirst({ orderBy: { number: 'desc' } })
-  const n = (latest?.number ?? 0) + 1
-  const now = new Date()
-  const first = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
-  const unlock = new Date(first.getTime() + 24 * 60 * 60 * 1000)
-  await prisma.week.create({ data: { number: n, startDate: now, firstBroadcastAt: first, unlockedAt: unlock, isLocked: false } })
-  revalidatePath('/admin/weeks')
 }
 
 export async function toggleLock(formData: FormData) {
@@ -31,62 +19,52 @@ export async function toggleLock(formData: FormData) {
   revalidatePath('/admin/weeks')
 }
 
-export async function updateTimes(formData: FormData) {
+export async function recomputeWeek(formData: FormData) {
   'use server'
   await requireAdmin()
-  const id = String(formData.get('id') || '')
-  const startDate = new Date(String(formData.get('startDate')))
-  const firstBroadcastAt = new Date(String(formData.get('firstBroadcastAt')))
-  const unlockedAt = new Date(String(formData.get('unlockedAt')))
-  await prisma.week.update({ where: { id }, data: { startDate, firstBroadcastAt, unlockedAt } })
-  revalidatePath('/admin/weeks')
+  const number = Number(formData.get('number') || 0)
+  await rebuildWeekScores(number)
+  revalidatePath('/leaderboard')
 }
 
-export default async function AdminWeeks() {
-  const session = await getServerSession(authOptions)
-  if ((session?.user as any)?.role !== 'ADMIN') return <div>Aðgangur bannaður.</div>
-
+export default async function WeeksAdminPage() {
+  await requireAdmin()
   const weeks = await prisma.week.findMany({ orderBy: { number: 'asc' } })
-
+  const now = new Date()
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Vikuyfirlit</h1>
-        <form action={createWeek}><button className="bg-white text-black rounded px-4 py-2">Bæta við viku</button></form>
-      </div>
-      <ul className="space-y-4">
-        {weeks.map(w => (
-          <li key={w.id} className="border border-neutral-800 rounded-xl p-4">
-            <div className="flex items-center justify-between">
-              <div className="font-medium">Vika {w.number}</div>
-              <form action={toggleLock}>
-                <input type="hidden" name="id" value={w.id} />
-                <button className={`text-xs rounded px-2 py-1 border ${w.isLocked ? 'border-yellow-600 text-yellow-300' : 'border-emerald-600 text-emerald-300'}`}>
-                  {w.isLocked ? 'Læst' : 'Opið'}
-                </button>
-              </form>
-            </div>
-
-            <form action={updateTimes} className="mt-3 grid md:grid-cols-3 gap-3 text-sm">
-              <input type="hidden" name="id" value={w.id} />
-              <label className="flex flex-col">
-                <span className="text-xs text-neutral-400 mb-1">Upphaf</span>
-                <input name="startDate" type="datetime-local" defaultValue={new Date(w.startDate).toISOString().slice(0,16)} className="bg-neutral-900 border border-neutral-800 rounded px-2 py-1" />
-              </label>
-              <label className="flex flex-col">
-                <span className="text-xs text-neutral-400 mb-1">Fyrsta útsending</span>
-                <input name="firstBroadcastAt" type="datetime-local" defaultValue={new Date(w.firstBroadcastAt).toISOString().slice(0,16)} className="bg-neutral-900 border border-neutral-800 rounded px-2 py-1" />
-              </label>
-              <label className="flex flex-col">
-                <span className="text-xs text-neutral-400 mb-1">Læsing af</span>
-                <input name="unlockedAt" type="datetime-local" defaultValue={new Date(w.unlockedAt).toISOString().slice(0,16)} className="bg-neutral-900 border border-neutral-800 rounded px-2 py-1" />
-              </label>
-              <div className="md:col-span-3">
-                <button className="mt-2 text-xs border border-neutral-700 rounded px-2 py-1">Vista tíma</button>
+      <h1 className="text-2xl font-semibold">Vikuyfirlit</h1>
+      <ul className="space-y-3">
+        {weeks.map(w => {
+          const autoLocked = now >= w.firstBroadcastAt && now < w.unlockedAt
+          return (
+            <li key={w.id} className="rounded-xl border border-neutral-800 p-4 flex flex-wrap items-center gap-3 justify-between">
+              <div className="space-y-1">
+                <div className="font-medium">Vika {w.number}</div>
+                <div className="text-xs text-neutral-400">
+                  {new Date(w.firstBroadcastAt).toUTCString().replace('GMT','UTC')} → {new Date(w.unlockedAt).toUTCString().replace('GMT','UTC')}
+                </div>
+                <div className="flex items-center gap-2 text-xs">
+                  {autoLocked && <span className="px-2 py-0.5 rounded-full bg-yellow-500/10 border border-yellow-600/40 text-yellow-200">Sjálflæst (14:00–17:00)</span>}
+                  {w.isLocked && <span className="px-2 py-0.5 rounded-full bg-red-500/10 border border-red-600/40 text-red-200">Handvirkt læst</span>}
+                  {!autoLocked && !w.isLocked && <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-600/40 text-emerald-200">Opinn</span>}
+                </div>
               </div>
-            </form>
-          </li>
-        ))}
+              <div className="flex items-center gap-2">
+                <form action={toggleLock}>
+                  <input type="hidden" name="id" value={w.id} />
+                  <button className="text-xs border border-neutral-700 rounded px-2 py-1">
+                    {w.isLocked ? 'Opna markað' : 'Læsa markað'}
+                  </button>
+                </form>
+                <form action={recomputeWeek}>
+                  <input type="hidden" name="number" value={w.number} />
+                  <button className="text-xs border border-neutral-700 rounded px-2 py-1">Endurreikna stig</button>
+                </form>
+              </div>
+            </li>
+          )
+        })}
       </ul>
     </div>
   )

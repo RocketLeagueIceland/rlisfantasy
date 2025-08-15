@@ -10,14 +10,14 @@ generator client {
 }
 
 model User {
-  id            String    @id @default(cuid())
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id            String   @id @default(cuid())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
   name          String?
-  email         String?   @unique
+  email         String?  @unique
   emailVerified DateTime?
   image         String?
-  role          String    @default("USER") @db.VarChar(16)
+  role          String   @default("USER") @db.VarChar(16)
 
   accounts Account[]
   sessions Session[]
@@ -60,10 +60,10 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
-model RLTeam {
-  id      String     @id @default(cuid())
-  name    String     @db.VarChar(120)
-  short   String?    @db.VarChar(12)
+model RLTeam { // Real Rocket League team
+  id    String  @id @default(cuid())
+  name  String  @db.VarChar(120)
+  short String? @db.VarChar(12)
   players Player[]
   weeks   TeamWeek[]
 }
@@ -73,10 +73,12 @@ model Player {
   name     String  @db.VarChar(120)
   rlTeamId String?
   rlTeam   RLTeam? @relation(fields: [rlTeamId], references: [id])
-  price    Int     @default(10) // credits
+  price    Int     @default(10)
 
   stats           PlayerGameStat[]
   teamMemberships TeamPlayer[]
+
+  aliases         PlayerAlias[]
 }
 
 model Week {
@@ -93,8 +95,8 @@ model Week {
   teamScores  TeamWeekScore[]
 }
 
-model TeamWeek {
-  id       String @id @default(cuid())
+model TeamWeek { // number of games each RLTeam plays that week
+  id       String  @id @default(cuid())
   rlTeamId String
   weekId   String
   games    Int
@@ -105,10 +107,10 @@ model TeamWeek {
   @@unique([rlTeamId, weekId])
 }
 
-model Game {
-  id     String   @id @default(cuid())
-  weekId String
-  date   DateTime
+model Game { // Optional granular entity if you ingest per-game stats
+  id       String   @id @default(cuid())
+  weekId   String
+  date     DateTime
 
   week Week @relation(fields: [weekId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
@@ -116,15 +118,16 @@ model Game {
 }
 
 model PlayerGameStat {
-  id       String  @id @default(cuid())
-  playerId String
-  weekId   String
-  gameId   String?
-  goals    Int     @default(0)
-  assists  Int     @default(0)
-  saves    Int     @default(0)
-  shots    Int     @default(0)
-  demos    Int     @default(0)
+  id        String   @id @default(cuid())
+  playerId  String
+  weekId    String
+  gameId    String?
+  goals     Int      @default(0)
+  assists   Int      @default(0)
+  saves     Int      @default(0)
+  shots     Int      @default(0)
+  demos     Int      @default(0)
+  score     Int      @default(0) // RL scoreboard points
 
   player Player @relation(fields: [playerId], references: [id])
   week   Week   @relation(fields: [weekId], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -133,28 +136,28 @@ model PlayerGameStat {
   @@index([playerId, weekId])
 }
 
-model Team {
-  id            String @id @default(cuid())
-  userId        String @unique
-  name          String @db.VarChar(80)
-  budgetInitial Int    @default(100)
-  budgetSpent   Int    @default(0)
+model Team { // Fantasy team per user
+  id             String        @id @default(cuid())
+  userId         String        @unique
+  name           String        @db.VarChar(80)
+  budgetInitial  Int           @default(100)
+  budgetSpent    Int           @default(0)
 
-  user    User            @relation(fields: [userId], references: [id])
-  members TeamPlayer[]
-  scores  TeamWeekScore[]
+  user     User         @relation(fields: [userId], references: [id])
+  members  TeamPlayer[]
+  scores   TeamWeekScore[]
 }
 
 model TeamPlayer {
-  id        String @id @default(cuid())
+  id        String   @id @default(cuid())
   teamId    String
   playerId  String
   pricePaid Int
 
   // Active vs Bench + order (1..3)
   isActive    Boolean @default(false)
-  activeOrder Int? // 1..3 when active
-  benchOrder  Int? // 1..3 when bench
+  activeOrder Int?    // 1..3 when active
+  benchOrder  Int?    // 1..3 when bench
 
   // Role for active slot only
   role String? @db.VarChar(16)
@@ -166,14 +169,25 @@ model TeamPlayer {
 }
 
 model TeamWeekScore {
-  id        String @id @default(cuid())
-  teamId    String
-  weekId    String
-  points    Int    @default(0)
+  id       String   @id @default(cuid())
+  teamId   String
+  weekId   String
+  points   Int      @default(0)
   breakdown String @db.Text
 
   team Team @relation(fields: [teamId], references: [id])
   week Week @relation(fields: [weekId], references: [id])
 
   @@unique([teamId, weekId])
+}
+
+model PlayerAlias {
+  id       String @id @default(cuid())
+  playerId String
+  alias    String @unique @db.VarChar(120)
+
+  // keep cascade so aliases are removed if the player is deleted
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([alias])
 }

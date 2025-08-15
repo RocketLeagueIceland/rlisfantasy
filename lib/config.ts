@@ -1,15 +1,17 @@
 export const POINTS = {
-  goal: 50, // Mark
-  assist: 35, // Stoðsending
-  save: 25, // Varsla
-  shot: 15, // Skot
-  demo: 15, // Sprengja
+  goal: 50,
+  assist: 25,
+  save: 25,
+  shot: 15,
+  score: 1, // RL scoreboard points
 }
 
-export const ROLE_BONUS = {
-  SHOOTER: { goal: 2 }, // double goals
-  CREATOR: { assist: 2 }, // double assists
-  WALL: { save: 2 }, // double saves
-} as const
+// Fantasy positions
+export type RoleOnField = 'STRIKER' | 'MIDFIELD' | 'DEFENSE'
 
-export const INITIAL_BUDGET = Number(process.env.FANTASY_INITIAL_BUDGET || 100)
+// Default 2×; can be overridden in .env / Vercel
+export const POSITION_BONUS_MULTIPLIER = Number(process.env.FANTASY_POSITION_BONUS || 2)
+
+// Salary cap
+export const SALARY_CAP = 9000
+export const INITIAL_BUDGET = SALARY_CAP
