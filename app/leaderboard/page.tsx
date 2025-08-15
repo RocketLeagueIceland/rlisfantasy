@@ -4,7 +4,8 @@ import Link from 'next/link'
 
 export const dynamic = 'force-dynamic'
 
-type PageProps = { searchParams?: { week?: string } }
+type SP = { week?: string | string[] }
+type PageProps = { searchParams: Promise<SP> }
 
 type Row = {
   teamId: string
@@ -16,7 +17,6 @@ type Row = {
 }
 
 function Avatar({ src, alt, size = 56 }: { src?: string | null; alt: string; size?: number }) {
-  // Use Discord image if present; otherwise generate an initials avatar via dicebear
   const fallback = `https://api.dicebear.com/9.x/initials/svg?seed=${encodeURIComponent(alt || 'User')}`
   return (
     <img
@@ -31,18 +31,19 @@ function Avatar({ src, alt, size = 56 }: { src?: string | null; alt: string; siz
 }
 
 export default async function LeaderboardPage({ searchParams }: PageProps) {
+  // ✅ Next 15: searchParams is async
+  const sp = (await searchParams) ?? {}
+  const toFirst = (v: unknown) => (Array.isArray(v) ? v[0] ?? '' : (v ?? ''))
+  const weekParam = String(toFirst(sp.week)).trim()
+  const selectedWeek = weekParam && /^\d+$/.test(weekParam) ? Number(weekParam) : null
+
   const weeks = await prisma.week.findMany({ orderBy: { number: 'asc' } })
-  const selectedWeek =
-    (searchParams?.week && /^\d+$/.test(searchParams.week) && Number(searchParams.week)) || null
 
   const teams = await prisma.team.findMany({
     include: {
       user: { select: { name: true, email: true, image: true } },
       scores: selectedWeek
-        ? {
-            where: { week: { number: selectedWeek } },
-            include: { week: true },
-          }
+        ? { where: { week: { number: selectedWeek } }, include: { week: true } }
         : { include: { week: true } },
     },
   })
@@ -61,10 +62,8 @@ export default async function LeaderboardPage({ searchParams }: PageProps) {
     }
   })
 
-  // Sort by points desc, then team name
+  // Sort + rank (ties share rank)
   rows.sort((a, b) => (b.points - a.points) || a.teamName.localeCompare(b.teamName))
-
-  // Rank with ties
   let lastPts = Infinity
   let rank = 0
   const ranked = rows.map((r, i) => {
@@ -75,7 +74,6 @@ export default async function LeaderboardPage({ searchParams }: PageProps) {
 
   const title = selectedWeek ? `Stigatafla – Vika ${selectedWeek}` : 'Stigatafla – Heildarstig'
   const podium = ranked.slice(0, 3)
-  const rest = ranked.slice(3)
 
   return (
     <div className="space-y-8">
@@ -102,9 +100,14 @@ export default async function LeaderboardPage({ searchParams }: PageProps) {
               </option>
             ))}
           </select>
-          <button className="text-sm border border-neutral-700 rounded px-3 py-2">Sía</button>
+          <button className="text-sm border border-neutral-700 rounded px-3 py-2">
+            Sía
+          </button>
           {selectedWeek && (
-            <Link href="/leaderboard" className="text-sm border border-neutral-700 rounded px-3 py-2">
+            <Link
+              href="/leaderboard"
+              className="text-sm border border-neutral-700 rounded px-3 py-2"
+            >
               Hreinsa
             </Link>
           )}
@@ -118,11 +121,8 @@ export default async function LeaderboardPage({ searchParams }: PageProps) {
           <div className="text-sm text-neutral-400">Engin lið á toppnum ennþá.</div>
         ) : (
           <div className="grid grid-cols-3 gap-4 items-end">
-            {/* 2nd */}
             <PodiumCard place={2} entry={podium[1]} className="translate-y-4" />
-            {/* 1st */}
             <PodiumCard place={1} entry={podium[0]} className="" highlight />
-            {/* 3rd */}
             <PodiumCard place={3} entry={podium[2]} className="translate-y-6" />
           </div>
         )}
@@ -182,7 +182,6 @@ export default async function LeaderboardPage({ searchParams }: PageProps) {
   )
 }
 
-/** Podium card (1st/2nd/3rd) */
 function PodiumCard({
   place,
   entry,

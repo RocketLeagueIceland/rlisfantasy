@@ -93,6 +93,8 @@ model Week {
   games       Game[]
   playerStats PlayerGameStat[]
   teamScores  TeamWeekScore[]
+
+  transferLogs TransferLog[]
 }
 
 model TeamWeek { // number of games each RLTeam plays that week
@@ -146,6 +148,9 @@ model Team { // Fantasy team per user
   user     User         @relation(fields: [userId], references: [id])
   members  TeamPlayer[]
   scores   TeamWeekScore[]
+
+  transferLogs TransferLog[]
+
 }
 
 model TeamPlayer {
@@ -190,4 +195,16 @@ model PlayerAlias {
   player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
 
   @@index([alias])
+}
+
+model TransferLog {
+  id        String   @id @default(cuid())
+  teamId    String
+  weekId    String
+  createdAt DateTime @default(now())
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  week Week @relation(fields: [weekId], references: [id])
+
+  @@unique([teamId, weekId])
 }

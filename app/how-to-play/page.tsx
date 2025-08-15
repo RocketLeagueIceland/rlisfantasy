@@ -103,7 +103,6 @@ export default function HowToPlay() {
           <h3 className="font-medium">Góð ráð</h3>
           <ul className="mt-2 text-sm text-neutral-300 space-y-2 list-disc pl-5">
             <li>Stilla stöður út frá styrkleikum leikmanna (markaskorarar í Striker o.s.frv.).</li>
-            <li>Fylgstu með hvort liðin þeirra eigi marga leiki þessa viku.</li>
             <li>Dreifðu fjárhættunni – ekki eyða öllu í tvo leikmenn.</li>
           </ul>
         </div>

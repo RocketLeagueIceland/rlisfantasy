@@ -1,24 +1,62 @@
 // lib/utils.ts
-import { prisma } from '@/lib/prisma'
+import { prisma } from './prisma'
 
-export async function isMarketLockedNow(): Promise<boolean> {
+/**
+ * Returns the "active" fantasy week that transfers should count against.
+ * We pick the next upcoming week (unlockedAt > now), earliest by firstBroadcastAt.
+ */
+export async function getActiveTransferWeek() {
   const now = new Date()
-  const week = await prisma.week.findFirst({
-    where: {
-      OR: [
-        { AND: [{ firstBroadcastAt: { lte: now } }, { unlockedAt: { gt: now } }] }, // inside 14–17 window
-        { isLocked: true }, // manual override
-      ],
-    },
-    orderBy: { number: 'desc' },
+  const w = await prisma.week.findFirst({
+    where: { unlockedAt: { gt: now } },
+    orderBy: { firstBroadcastAt: 'asc' },
   })
-  return !!week
+  return w || null
 }
 
+/** True if we are currently inside the broadcast lock window for the active week. */
+export function isWithinLockWindow(week: { firstBroadcastAt: Date; unlockedAt: Date }) {
+  const now = new Date()
+  return now >= week.firstBroadcastAt && now < week.unlockedAt
+}
+
+/** Throws if market is locked (manual lock or within broadcast window). */
 export async function assertMarketOpen() {
-  if (await isMarketLockedNow()) {
-    const err: any = new Error('Market locked (14:00–17:00) or manually locked')
-    err.status = 400
+  const week = await getActiveTransferWeek()
+  if (!week) return null // season not scheduled → treat as open
+  if (week.isLocked || isWithinLockWindow(week)) {
+    const err: any = new Error('Markaður er læstur.')
+    err.status = 423
     throw err
   }
+  return week
+}
+
+/** Enforce 1 transfer per week once team is full (6). */
+export async function assertTransferAvailable(teamId: string, currentSize: number) {
+  // Free build phase: before you reach 6 players → unlimited changes
+  if (currentSize < 6) return { week: await assertMarketOpen(), alreadyUsed: false }
+
+  const week = await assertMarketOpen()
+  if (!week) return { week: null, alreadyUsed: false }
+
+  const used = await prisma.transferLog.findUnique({
+    where: { teamId_weekId: { teamId, weekId: week.id } },
+    select: { id: true },
+  })
+  if (used) {
+    const err: any = new Error('Þú hefur þegar gert skipti þessa viku.')
+    err.status = 429
+    throw err
+  }
+  return { week, alreadyUsed: false }
+}
+
+/** Mark the weekly transfer as used (call inside same transaction as the change). */
+export async function markTransferUsed(teamId: string, weekId: string, tx = prisma) {
+  await tx.transferLog.upsert({
+    where: { teamId_weekId: { teamId, weekId } },
+    create: { teamId, weekId },
+    update: {},
+  })
 }
