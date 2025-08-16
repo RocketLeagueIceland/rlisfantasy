@@ -2,58 +2,64 @@ import { prisma } from '@/lib/prisma'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { revalidatePath } from 'next/cache'
+import BallFormClient from './ball-form.client'
 import { rebuildWeekScores } from '@/lib/fantasy'
 
 async function requireAdmin() {
   const session = await getServerSession(authOptions)
   if ((session?.user as any)?.role !== 'ADMIN') throw new Error('Forbidden')
-  return session
 }
 
+// --- helpers ---
 function extractBallchasingGroupId(input: string) {
   try {
     const u = new URL(input)
-    // Accept: https://ballchasing.com/group/<id> or /api/groups/<id>
     const parts = u.pathname.split('/').filter(Boolean)
-    const idx = Math.max(parts.indexOf('group'), parts.indexOf('groups'))
-    if (idx >= 0 && parts[idx + 1]) return parts[idx + 1]
+    const i = Math.max(parts.indexOf('group'), parts.indexOf('groups'))
+    if (i >= 0 && parts[i + 1]) return parts[i + 1]
     return input.trim()
   } catch {
     return input.trim()
   }
 }
 
-export async function importBallchasing(formData: FormData) {
+type ActionResult = { ok: boolean; message?: string }
+
+// --- Server action: Ballchasing import (averages) ---
+export async function importBallchasing(formData: FormData): Promise<ActionResult> {
   'use server'
   await requireAdmin()
 
   const weekId = String(formData.get('weekId') || '')
   const raw = String(formData.get('group') || '').trim()
   const groupId = extractBallchasingGroupId(raw)
+
   const token = process.env.BALLCHASING_API_TOKEN
   if (!token) return { ok: false, message: 'Settu BALLCHASING_API_TOKEN í umhverfisbreytur.' }
 
-  // Fetch group from Ballchasing
+  // 1) Fetch group
   const res = await fetch(`https://ballchasing.com/api/groups/${groupId}`, {
     headers: { Authorization: token },
     next: { revalidate: 0 },
   })
   if (!res.ok) return { ok: false, message: `Ballchasing ${res.status}` }
-  const data = await res.json() as any
+  const data = (await res.json()) as any
 
   const players = (data.players || []) as any[]
   if (!players.length) return { ok: false, message: 'Engir leikmenn fundust í hópnum.' }
 
+  // 2) Map names/aliases → playerId
   const names = players.map((p) => String(p.name))
   const [byName, aliases] = await Promise.all([
     prisma.player.findMany({ where: { name: { in: names } }, select: { id: true, name: true } }),
     prisma.playerAlias.findMany({ where: { alias: { in: names } }, include: { player: true } }),
   ])
-
   const nameMap = new Map(byName.map((p) => [p.name.toLowerCase(), p.id]))
   const aliasMap = new Map(aliases.map((a) => [a.alias.toLowerCase(), a.player.id]))
 
-  const upserts: {
+  // 3) Build per-game averages
+  const round2 = (x: number) => Math.round(x * 100) / 100
+  const rows: {
     playerId: string
     weekId: string
     goals: number
@@ -65,47 +71,50 @@ export async function importBallchasing(formData: FormData) {
   }[] = []
   const unmatched: string[] = []
 
-  const round2 = (x: number) => Math.round(x * 100) / 100
-
   for (const p of players) {
-    const lower = String(p.name || '').toLowerCase()
-    const playerId = nameMap.get(lower) || aliasMap.get(lower)
+    const key = String(p.name || '').toLowerCase()
+    const playerId = nameMap.get(key) || aliasMap.get(key)
     if (!playerId) { unmatched.push(p.name); continue }
 
     const core = p.cumulative?.core || {}
-    const games = Math.max(1, Math.round(p.cumulative?.games || 1))
+    const games = Math.max(1, Number(p.cumulative?.games || 1))
 
-    // Convert TOTALS -> AVERAGES per game
-    const goals  = round2((core.goals  || 0) / games)
-    const assists= round2((core.assists|| 0) / games)
-    const saves  = round2((core.saves  || 0) / games)
-    const shots  = round2((core.shots  || 0) / games)
-    const score  = round2((core.score  || 0) / games)
-
-    upserts.push({ playerId, weekId, goals, assists, saves, shots, score, games })
+    rows.push({
+      playerId,
+      weekId,
+      goals:  round2((Number(core.goals)  || 0) / games),
+      assists:round2((Number(core.assists)|| 0) / games),
+      saves:  round2((Number(core.saves)  || 0) / games),
+      shots:  round2((Number(core.shots)  || 0) / games),
+      score:  round2((Number(core.score)  || 0) / games),
+      games,
+    })
   }
 
-  // One row per player/week → delete existing then insert
-  // (we have @@unique([playerId, weekId]))
-  const ids = upserts.map(u => u.playerId)
+  // 4) Overwrite existing stats for this week (those players)
+  const ids = rows.map(r => r.playerId)
   await prisma.$transaction(async (tx) => {
-    if (ids.length) await tx.playerGameStat.deleteMany({ where: { weekId, playerId: { in: ids } } })
-    if (upserts.length) await tx.playerGameStat.createMany({ data: upserts })
+    if (ids.length) {
+      await tx.playerGameStat.deleteMany({ where: { weekId, playerId: { in: ids } } })
+    }
+    if (rows.length) {
+      await tx.playerGameStat.createMany({ data: rows })
+    }
   })
 
-  // Recompute leaderboard for that week number
-  const week = await prisma.week.findUnique({ where: { id: weekId }, select: { number: true } })
-  if (week?.number != null) {
-    // defer to API or call directly if you prefer:
-    // await rebuildWeekScores(week.number)
+  // 5) Recompute week scores and revalidate
+  const wk = await prisma.week.findUnique({ where: { id: weekId }, select: { number: true } })
+  if (wk?.number != null) {
+    await rebuildWeekScores(wk.number)
   }
-
   revalidatePath('/leaderboard')
-  return { ok: true, message: `Vistað með meðaltölum fyrir ${upserts.length} leikmenn. Ómappað: ${unmatched.join(', ') || '—'}` }
+  revalidatePath('/dashboard')
+
+  return { ok: true, message: `Vistað með meðaltölum fyrir ${rows.length} leikmenn. Ómappað: ${unmatched.join(', ') || '—'}` }
 }
 
-
-export async function ingestCsv(formData: FormData) {
+// --- Server action: CSV ingest (kept simple, no client pending) ---
+export async function ingestCsv(formData: FormData): Promise<ActionResult> {
   'use server'
   await requireAdmin()
   const weekId = String(formData.get('weekId') || '')
@@ -113,72 +122,63 @@ export async function ingestCsv(formData: FormData) {
   if (!file) return { ok: false, message: 'Vantar CSV skrá.' }
 
   const text = await file.text()
-  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
-  if (!lines.length) return { ok: false, message: 'Skrá tóm.' }
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
 
-  const header = lines.shift()!.toLowerCase()
-  const cols = header.split(',').map(s => s.trim())
-  const idx = (k: string) => cols.indexOf(k)
+  const header = lines.shift() || ''
+  const cols = header.split(',').map((c) => c.trim().toLowerCase())
+  const required = ['player', 'goals', 'assists', 'saves', 'shots', 'score']
+  if (required.some((r) => !cols.includes(r))) {
+    return { ok: false, message: 'Hauslína þarf: player,goals,assists,saves,shots,score' }
+  }
+  const get = (arr: string[], key: string) => arr[cols.indexOf(key)]
 
-  // We support two formats:
-  // A) averages: player,goals,assists,saves,shots,score
-  // B) totals + games: player,goals,assists,saves,shots,score,games
-  const hasGames = idx('games') >= 0
-
-  const need = ['player','goals','assists','saves','shots','score']
-  if (need.some(n => idx(n) < 0)) {
-    return { ok: false, message: 'Hauslína þarf: player,goals,assists,saves,shots,score[,games]' }
+  const rows = [] as { player: string; goals: number; assists: number; saves: number; shots: number; score: number }[]
+  for (const l of lines) {
+    const arr = l.split(',')
+    if (arr.length < cols.length) continue
+    rows.push({
+      player: get(arr, 'player'),
+      goals: Number(get(arr, 'goals') || 0),
+      assists: Number(get(arr, 'assists') || 0),
+      saves: Number(get(arr, 'saves') || 0),
+      shots: Number(get(arr, 'shots') || 0),
+      score: Number(get(arr, 'score') || 0),
+    })
   }
 
-  const rows = lines.map(l => l.split(','))
-  const names = rows.map(r => r[idx('player')])
+  const names = rows.map((r) => r.player)
   const [byName, aliases] = await Promise.all([
     prisma.player.findMany({ where: { name: { in: names } }, select: { id: true, name: true } }),
     prisma.playerAlias.findMany({ where: { alias: { in: names } }, include: { player: true } }),
   ])
-  const nameMap = new Map(byName.map(p => [p.name.toLowerCase(), p.id]))
-  const aliasMap = new Map(aliases.map(a => [a.alias.toLowerCase(), a.player.id]))
+  const nameMap = new Map(byName.map((p) => [p.name.toLowerCase(), p.id]))
+  const aliasMap = new Map(aliases.map((a) => [a.alias.toLowerCase(), a.player.id]))
 
-  const round2 = (x: number) => Math.round(x * 100) / 100
-
-  const upserts: any[] = []
-  const unmatched: string[] = []
-
+  const creates = [] as any[]
+  const unmatched = [] as string[]
   for (const r of rows) {
-    const playerName = String(r[idx('player')] || '').trim()
-    const id = nameMap.get(playerName.toLowerCase()) || aliasMap.get(playerName.toLowerCase())
-    if (!id) { unmatched.push(playerName); continue }
-
-    const g  = Number(r[idx('goals')]   || 0)
-    const a  = Number(r[idx('assists')] || 0)
-    const sv = Number(r[idx('saves')]   || 0)
-    const sh = Number(r[idx('shots')]   || 0)
-    const sc = Number(r[idx('score')]   || 0)
-    const games = hasGames ? Math.max(1, Number(r[idx('games')] || 1)) : 1
-
-    // If games present → convert totals→avg; else treat as averages directly
-    const goals   = hasGames ? round2(g / games)  : round2(g)
-    const assists = hasGames ? round2(a / games)  : round2(a)
-    const saves   = hasGames ? round2(sv / games) : round2(sv)
-    const shots   = hasGames ? round2(sh / games) : round2(sh)
-    const score   = hasGames ? round2(sc / games) : round2(sc)
-
-    upserts.push({ playerId: id, weekId, goals, assists, saves, shots, score, games })
+    const id = nameMap.get(r.player.toLowerCase()) || aliasMap.get(r.player.toLowerCase())
+    if (!id) { unmatched.push(r.player); continue }
+    creates.push({ playerId: id, weekId, goals: r.goals, assists: r.assists, saves: r.saves, shots: r.shots, score: r.score })
   }
 
   await prisma.$transaction(async (tx) => {
-    if (upserts.length) {
-      await tx.playerGameStat.deleteMany({ where: { weekId, playerId: { in: upserts.map(u => u.playerId) } } })
-      await tx.playerGameStat.createMany({ data: upserts })
+    if (creates.length) {
+      await tx.playerGameStat.deleteMany({ where: { weekId, playerId: { in: creates.map((c) => c.playerId) } } })
+      await tx.playerGameStat.createMany({ data: creates })
     }
   })
 
-  // Optionally recompute here as well (same as above)
+  const wk = await prisma.week.findUnique({ where: { id: weekId }, select: { number: true } })
+  if (wk?.number != null) await rebuildWeekScores(wk.number)
   revalidatePath('/leaderboard')
-  return { ok: true, message: `CSV vistað með meðaltölum fyrir ${upserts.length} leikmenn. Ómappað: ${unmatched.join(', ') || '—'}` }
+  revalidatePath('/dashboard')
+
+  return { ok: true, message: `CSV: ${creates.length} raðir. Ómappað: ${unmatched.join(', ') || '—'}` }
 }
 
-export async function addAlias(formData: FormData) {
+// --- Server action: add alias ---
+export async function addAlias(formData: FormData): Promise<ActionResult> {
   'use server'
   await requireAdmin()
   const playerId = String(formData.get('playerId') || '')
@@ -188,9 +188,9 @@ export async function addAlias(formData: FormData) {
   return { ok: true, message: 'Alias bætt við.' }
 }
 
+// --- Page ---
 export default async function IngestPage() {
-  const session = await getServerSession(authOptions)
-  if ((session?.user as any)?.role !== 'ADMIN') return <div>Aðgangur bannaður.</div>
+  await requireAdmin()
 
   const [weeks, players] = await Promise.all([
     prisma.week.findMany({ orderBy: { number: 'asc' } }),
@@ -203,42 +203,41 @@ export default async function IngestPage() {
     <div className="space-y-8">
       <h1 className="text-2xl font-semibold">Hlaða inn tölfræði</h1>
 
-      {/* Ballchasing */}
+      {/* Ballchasing with inline loading & feedback */}
       <section className="rounded-xl border border-neutral-800 p-4 space-y-3">
         <h2 className="font-medium">Ballchasing API</h2>
-        <p className="text-sm text-neutral-400">Límdu inn Group slóð eða ID. Við náum í leikmannatölfræði (samtals) og skrifum inn í völdu viku.</p>
-        <form action={importBallchasing} className="grid md:grid-cols-[1fr,220px,auto] gap-2 items-end">
-          <label className="flex flex-col">
-            <span className="text-xs text-neutral-400 mb-1">Group slóð eða ID</span>
-            <input name="group" placeholder="https://ballchasing.com/group/xxxxx" className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2" />
-          </label>
-          <label className="flex flex-col">
-            <span className="text-xs text-neutral-400 mb-1">Vika</span>
-            <select name="weekId" defaultValue={defaultWeek?.id} className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2">
-              {weeks.map(w => <option key={w.id} value={w.id}>Vika {w.number}</option>)}
-            </select>
-          </label>
-          <button className="bg-white text-black rounded px-4 py-2">Sækja & vista</button>
-        </form>
-        <p className="text-xs text-neutral-500">Þú þarft að setja <code>BALLCHASING_API_TOKEN</code> í umhverfisbreytur.</p>
+        <p className="text-sm text-neutral-400">
+          Límdu inn Group slóð eða ID. Við náum í leikmannatölfræði (MEÐALTÖL per leik) og skrifum inn í völdu viku.
+        </p>
+
+        <BallFormClient
+          action={importBallchasing}
+          weeks={weeks.map(w => ({ id: w.id, number: w.number }))}
+          defaultWeekId={defaultWeek?.id}
+        />
+
+        <p className="text-xs text-neutral-500">
+          Þú þarft að setja <code>BALLCHASING_API_TOKEN</code> í umhverfisbreytur.
+        </p>
       </section>
 
-      {/* CSV */}
+      {/* CSV (simple submit; no spinner needed here, but we can add similarly if you want) */}
       <section className="rounded-xl border border-neutral-800 p-4 space-y-3">
         <h2 className="font-medium">CSV innlestur</h2>
         <p className="text-sm text-neutral-400">Skrá með haus: <code>player,goals,assists,saves,shots,score</code></p>
-        <form action={ingestCsv} className="grid md:grid-cols-[1fr,220px,auto] gap-2 items-end" encType="multipart/form-data">
+        <form action={ingestCsv} className="grid md:grid-cols-[1fr,220px,auto] gap-2 items-end">
           <input type="file" name="file" accept=".csv,text/csv" className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2" />
           <select name="weekId" defaultValue={defaultWeek?.id} className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2">
             {weeks.map(w => <option key={w.id} value={w.id}>Vika {w.number}</option>)}
           </select>
           <button className="border border-neutral-700 rounded px-4 py-2">Hlaða inn CSV</button>
         </form>
+
       </section>
 
       {/* Aliases */}
       <section className="rounded-xl border border-neutral-800 p-4 space-y-3">
-        <h2 className="font-medium">Leikmanna‑alias</h2>
+        <h2 className="font-medium">Leikmanna-alias</h2>
         <p className="text-sm text-neutral-400">Ef nafnið í Ballchasing passar ekki við leikmann hér, bættu við alias.</p>
         <form action={addAlias} className="flex flex-wrap items-end gap-2">
           <label className="flex flex-col">
