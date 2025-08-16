@@ -148,7 +148,7 @@ model Team {
   id            String @id @default(cuid())
   userId        String @unique
   name          String @db.VarChar(80)
-  budgetInitial Int    @default(100)
+  budgetInitial Int    @default(10000000)
   budgetSpent   Int    @default(0)
 
   user    User            @relation(fields: [userId], references: [id])

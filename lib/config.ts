@@ -13,5 +13,6 @@ export type RoleOnField = 'STRIKER' | 'MIDFIELD' | 'DEFENSE'
 export const POSITION_BONUS_MULTIPLIER = Number(process.env.FANTASY_POSITION_BONUS || 2)
 
 // Salary cap
-export const SALARY_CAP = 9000
+export const SALARY_CAP = Number(process.env.FANTASY_SALARY_CAP ?? 10_000_000)
 export const INITIAL_BUDGET = SALARY_CAP
+
