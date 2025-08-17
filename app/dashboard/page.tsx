@@ -25,6 +25,8 @@ function logoForTeamName(name?: string | null) {
 // -----------------------------
 // Server Actions (Market)
 // -----------------------------
+import { redirect } from 'next/navigation'
+
 export async function createTeam(formData: FormData) {
   'use server'
   const session = await getServerSession(authOptions)
@@ -33,7 +35,8 @@ export async function createTeam(formData: FormData) {
   await prisma.team.create({
     data: { name, userId: (session.user as any).id, budgetInitial: SALARY_CAP },
   })
-  revalidatePath('/dashboard')
+  // Ensures the page shows the new empty team immediately
+  redirect('/dashboard')
 }
 
 export async function buyAction(...args: any[]) {

@@ -1,7 +1,7 @@
 // components/team-field.tsx
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import {
   DndContext,
   DragOverlay,
@@ -39,7 +39,7 @@ async function postJSON(url: string, body: any) {
 
 function Spinner({ className = '' }: { className?: string }) {
   return (
-    <svg className={`animate-spin ${className}`} viewBox="0 0 24 24" width="14" height="14">
+    <svg className={`animate-spin ${className}`} viewBox="0 0 24 24" width="14" height="14" aria-hidden>
       <circle cx="12" cy="12" r="10" stroke="currentColor" strokeOpacity="0.25" strokeWidth="4" fill="none" />
       <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" strokeWidth="4" strokeLinecap="round" fill="none" />
     </svg>
@@ -57,7 +57,7 @@ export default function TeamField({
   defs: Item[]
   canEdit: boolean
 }) {
-  // Build 2 fixed slots per row
+  // Build 2 fixed slots per row and keep them in sync with server props
   const initialSlots = useMemo(() => {
     const fill = (arr: Item[]) => [arr[0] || null, arr[1] || null] as (Item | null)[]
     return {
@@ -65,11 +65,12 @@ export default function TeamField({
       MIDFIELD: fill(mids),
       DEFENSE: fill(defs),
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []) // lock initial to first render; server is source of truth
+  }, [strikers, mids, defs])
 
   const [ui, setUi] = useState(initialSlots)
-  const [active, setActive] = useState<Item | null>(null)       // for drag overlay
+  useEffect(() => setUi(initialSlots), [initialSlots])
+
+  const [active, setActive] = useState<Item | null>(null)          // for drag overlay
   const [selectedId, setSelectedId] = useState<string | null>(null) // for tap-to-swap on mobile
   const [pending, setPending] = useState(false)
   const [affected, setAffected] = useState<string[]>([])
@@ -107,16 +108,13 @@ export default function TeamField({
       if (!from) return prev
       // remove from source
       next[from.role][from.index] = null
-      // place into target
-      next[to.role][to.index] = (initialSlots[from.role][from.index] || initialSlots[to.role][to.index] || { id } as any)
-      // ensure we use actual item object
-      const item =
-        initialSlots[from.role][from.index]?.id === id
-          ? initialSlots[from.role][from.index]
-          : initialSlots[to.role][to.index]?.id === id
-            ? initialSlots[to.role][to.index]
-            : prev[from.role][from.index] || prev[to.role][to.index]
-      next[to.role][to.index] = item as Item
+      // place into target (use a known object reference if possible)
+      const candidate =
+        prev[from.role][from.index] ||
+        prev[to.role][to.index] ||
+        initialSlots[from.role][from.index] ||
+        initialSlots[to.role][to.index]
+      next[to.role][to.index] = (candidate && (candidate as Item).id === id) ? (candidate as Item) : (candidate as Item) || ({} as Item)
       return next
     })
   }
@@ -130,11 +128,11 @@ export default function TeamField({
 
   const onDragEnd = async (event: DragEndEvent) => {
     if (!canEdit || pending) { setActive(null); return }
-
+    const over = event.over
     const activeItem = event.active?.data?.current?.item as Item | undefined
-    const overRole = event.over?.data?.current?.role as Role | undefined
-    const overIndex = event.over?.data?.current?.index as number | undefined
-    const overOccupantId = event.over?.data?.current?.occupantId as string | null | undefined
+    const overRole = over?.data?.current?.role as Role | undefined
+    const overIndex = over?.data?.current?.index as number | undefined
+    const overOccupantId = over?.data?.current?.occupantId as string | null | undefined
 
     setActive(null)
     if (!activeItem || overRole == null || overIndex == null) return
@@ -145,6 +143,7 @@ export default function TeamField({
       setAffected(overOccupantId ? [activeItem.id, overOccupantId] : [activeItem.id])
 
       if (overOccupantId && overOccupantId !== activeItem.id) {
+        // Optimistic SWAP
         optimisticSwap(activeItem.id, overOccupantId)
         await postJSON('/api/team/role', {
           teamPlayerId: activeItem.id,
@@ -152,6 +151,7 @@ export default function TeamField({
           swapWithId: overOccupantId,
         })
       } else {
+        // Optimistic MOVE (empty slot)
         optimisticMove(activeItem.id, { role: overRole, index: overIndex })
         await postJSON('/api/team/role', {
           teamPlayerId: activeItem.id,
@@ -229,7 +229,7 @@ export default function TeamField({
 
         {/* saving ribbon */}
         {pending && (
-          <div className="absolute left-1/2 -translate-x-1/2 top-3 z-10 px-3 py-1 rounded-full border border-neutral-700 bg-neutral-900/80 text-xs text-neutral-300 flex items-center gap-2">
+          <div className="absolute left-1/2 -translate-x-1/2 top-3 z-10 px-3 py-1 rounded-full border border-neutral-700 bg-neutral-900/90 text-xs text-neutral-300 flex items-center gap-2">
             <Spinner />
             <span>Vista breytingu…</span>
           </div>
@@ -334,7 +334,8 @@ function Slot({
     <div
       ref={setNodeRef}
       onClick={() => canEdit && onTap({ role, index, occupantId: item?.id ?? null })}
-      className={`w-full max-w-[240px] rounded-lg border bg-green-950/30 backdrop-blur-sm px-3 py-2 transition cursor-pointer
+      className={`w-full max-w-[240px] rounded-lg border bg-green-950/30 backdrop-blur-sm px-3 py-2 transition
+        ${canEdit ? 'cursor-pointer' : 'cursor-default'}
         ${isSelected ? 'border-emerald-400 shadow-[0_0_0_2px_rgba(16,185,129,0.25)]' :
           isOver ? 'border-emerald-500/50' : 'border-green-900/40'}
         ${isAffected ? 'opacity-70' : ''}`}
@@ -372,6 +373,7 @@ function DraggableCard({
   const style = {
     transform: CSS.Translate.toString(transform),
     opacity: isDragging ? 0.2 : 1,
+    cursor: canEdit ? (isDragging ? 'grabbing' as const : 'grab' as const) : 'default',
   } as React.CSSProperties
 
   return (
@@ -393,7 +395,12 @@ function DraggableCard({
             onClick={async () => {
               try {
                 await postJSON('/api/market/sell', { teamPlayerId: item.id })
-                window.location.reload()
+                // Prefer a soft refresh over a hard reload
+                window?.requestAnimationFrame(() => {
+                  // If you already have a router in scope here you can call router.refresh()
+                  // but since this is a tiny client island, a simple reload is fine:
+                  window.location.reload()
+                })
               } catch (err) {
                 alert((err as Error).message)
               }
@@ -418,11 +425,7 @@ function PlayerCard({
   overlay?: boolean
 }) {
   return (
-    <div
-      className={`min-w-0 flex items-center gap-2 ${
-        overlay ? 'rounded-lg border border-neutral-700 bg-neutral-900/90 px-3 py-2 shadow-xl' : ''
-      }`}
-    >
+    <div className={`min-w-0 flex items-start gap-2 ${overlay ? 'rounded-lg border border-neutral-700 bg-neutral-900/90 px-3 py-2 shadow-xl' : ''}`}>
       {item.teamLogo ? (
         <img
           src={item.teamLogo}
@@ -430,34 +433,15 @@ function PlayerCard({
           className="w-7 h-7 border border-neutral-700 object-cover rounded-none"
         />
       ) : (
-        <div className="w-7 h-7 border border-neutral-700 grid place-items-center text-[10px] text-neutral-300 rounded-none">
-          RL
-        </div>
+        <div className="w-7 h-7 border border-neutral-700 grid place-items-center text-[10px] text-neutral-300 rounded-none">RL</div>
       )}
-
-      <div className="min-w-0 leading-tight">
+      <div className="min-w-0">
         <div className="text-sm font-medium truncate">{item.name}</div>
-
-        {/* team (always its own line) */}
-        <div className="text-[10px] text-neutral-300 truncate">
-          {item.teamName || '—'}
-          {/* desktop/tablet: keep role inline after a dot */}
-          {role ? (
-            <span className="hidden sm:inline">
-              {' '}
-              · <span className="uppercase tracking-wide">{role}</span>
-            </span>
-          ) : null}
-        </div>
-
-        {/* mobile: show role on the next line */}
+        <div className="text-[10px] text-neutral-300 truncate">{item.teamName || '—'}</div>
         {role ? (
-          <div className="sm:hidden text-[10px] text-neutral-300 uppercase tracking-wide mt-0.5">
-            {role}
-          </div>
+          <div className="text-[10px] text-neutral-400 uppercase tracking-wide">{role}</div>
         ) : null}
       </div>
     </div>
   )
 }
-
