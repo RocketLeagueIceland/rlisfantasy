@@ -151,6 +151,10 @@ model Team {
   budgetInitial Int    @default(10000000)
   budgetSpent   Int    @default(0)
 
+  // NEW
+  isLockedIn Boolean   @default(false)
+  lockedInAt DateTime?
+
   user    User            @relation(fields: [userId], references: [id])
   members TeamPlayer[]
   scores  TeamWeekScore[]

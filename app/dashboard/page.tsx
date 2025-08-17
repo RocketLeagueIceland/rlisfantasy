@@ -5,28 +5,29 @@ import { revalidatePath } from 'next/cache'
 import { SALARY_CAP } from '@/lib/config'
 import TeamField from '@/components/team-field'
 import { BuyButton } from '@/components/buy-button'
+import { redirect } from 'next/navigation'
 
 // -----------------------------
 // Helpers
 // -----------------------------
 function slugify(input?: string | null) {
   if (!input) return null
-  return input
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '')
+  return input.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
 }
-
 function logoForTeamName(name?: string | null) {
   const slug = slugify(name)
   return slug ? `/teams/${slug}.png` : null
 }
+function countRole(members: { role: string | null }[], r: string) {
+  return members.filter((m) => m.role === r).length
+}
+async function getOpenWeek() {
+  return prisma.week.findFirst({ where: { isLocked: false }, orderBy: { number: 'asc' } })
+}
 
 // -----------------------------
-// Server Actions (Market)
+// Server Actions
 // -----------------------------
-import { redirect } from 'next/navigation'
-
 export async function createTeam(formData: FormData) {
   'use server'
   const session = await getServerSession(authOptions)
@@ -35,74 +36,163 @@ export async function createTeam(formData: FormData) {
   await prisma.team.create({
     data: { name, userId: (session.user as any).id, budgetInitial: SALARY_CAP },
   })
-  // Ensures the page shows the new empty team immediately
+  // Show the new team immediately
   redirect('/dashboard')
 }
 
+export async function lockTeamAction() {
+  'use server'
+  const session = await getServerSession(authOptions)
+  if (!session?.user) return { ok: false, error: 'Þarft að skrá þig inn.' }
+  const userId = (session.user as any).id as string
+
+  const team = await prisma.team.findUnique({ where: { userId }, include: { members: true } })
+  if (!team) return { ok: false, error: 'Engin lið.' }
+  if (team.isLockedIn) return { ok: false, error: 'Lið er þegar staðfest.' }
+  if (team.members.length !== 6) return { ok: false, error: 'Lið þarf að vera 6 leikmenn.' }
+
+  const s = countRole(team.members, 'STRIKER')
+  const m = countRole(team.members, 'MIDFIELD')
+  const d = countRole(team.members, 'DEFENSE')
+  if (s !== 2 || m !== 2 || d !== 2) {
+    return { ok: false, error: 'Þarf 2×Striker, 2×Midfield, 2×Defense.' }
+  }
+
+  await prisma.team.update({
+    where: { id: team.id },
+    data: { isLockedIn: true, lockedInAt: new Date() },
+  })
+  revalidatePath('/dashboard')
+  return { ok: true }
+}
+
+/**
+ * BUY with pre/post lock rules:
+ * - Before lock: unlimited (respect cap + 2/role + max 6).
+ * - After lock: exactly ONE weekly transfer (replace = sell+buy in one go).
+ *   If team is full, must provide replaceTeamPlayerId.
+ */
 export async function buyAction(...args: any[]) {
   'use server'
   const session = await getServerSession(authOptions)
   if (!session?.user) return { ok: false, error: 'Þú þarft að vera skráður inn.' }
 
-  // Support both call styles (form action vs useFormState)
+  // Support both call styles (form action vs useActionState/useFormState)
   const formData: FormData | null =
     args[0] instanceof FormData ? args[0] : (args[1] instanceof FormData ? args[1] : null)
   if (!formData) return { ok: false, error: 'Ógild beiðni (vantar form gögn).' }
 
   const userId = (session.user as any).id as string
   const playerId = String(formData.get('playerId') || '')
-  const role = String(formData.get('role') || '') as 'STRIKER'|'MIDFIELD'|'DEFENSE'
+  const role = String(formData.get('role') || '') as 'STRIKER' | 'MIDFIELD' | 'DEFENSE'
+  const replaceTeamPlayerId = String(formData.get('replaceTeamPlayerId') || '')
   if (!playerId) return { ok: false, error: 'Vantar leikmann.' }
-  if (!['STRIKER','MIDFIELD','DEFENSE'].includes(role)) return { ok: false, error: 'Veldu stöðu.' }
+  if (!['STRIKER', 'MIDFIELD', 'DEFENSE'].includes(role)) return { ok: false, error: 'Veldu stöðu.' }
 
-  // Market open? (manual open week = any week where isLocked=false)
-  const openWeek = await prisma.week.findFirst({ where: { isLocked: false }, orderBy: { number: 'asc' } })
-  if (!openWeek) return { ok: false, error: 'Markaður er læstur.' }
-
-  const [team, player] = await Promise.all([
+  const [team, player, openWeek] = await Promise.all([
     prisma.team.findUnique({ where: { userId }, include: { members: true } }),
     prisma.player.findUnique({ where: { id: playerId } }),
+    getOpenWeek(),
   ])
   if (!team) return { ok: false, error: 'Þú þarft að stofna lið fyrst.' }
   if (!player) return { ok: false, error: 'Leikmaður fannst ekki.' }
-
-  // Team full
-  if (team.members.length >= 6) {
-    return { ok: false, error: 'Liðið þitt er fullt (6 leikmenn). Seldu leikmann áður en þú bætir við nýjum.' }
-  }
-
-  // One player only once
-  if (team.members.some(m => m.playerId === player.id)) {
+  if (!openWeek) return { ok: false, error: 'Markaður er læstur.' }
+  if (team.members.some((m) => m.playerId === player.id)) {
     return { ok: false, error: 'Leikmaður er þegar í liðinu.' }
   }
 
-  // 2 per role
-  const roleCount = (r: string) => team.members.filter(m => m.role === r).length
-  if (role === 'STRIKER' && roleCount('STRIKER') >= 2) return { ok: false, error: 'Búið að fylla STRIKER (2/2).' }
-  if (role === 'MIDFIELD' && roleCount('MIDFIELD') >= 2) return { ok: false, error: 'Búið að fylla MIDFIELD (2/2).' }
-  if (role === 'DEFENSE' && roleCount('DEFENSE') >= 2) return { ok: false, error: 'Búið að fylla DEFENSE (2/2).' }
+  const teamFull = team.members.length >= 6
 
-  // Salary cap
-  if (team.budgetSpent + player.price > team.budgetInitial) {
-    return { ok: false, error: 'Fer yfir Salary Cap.' }
+  // BEFORE LOCK → unlimited (within constraints)
+  if (!team.isLockedIn) {
+    if (teamFull) return { ok: false, error: 'Liðið er fullt (6). Seldu fyrst eða staðfestu liðið og notaðu „replace“.' }
+
+    const left = {
+      STRIKER: Math.max(0, 2 - countRole(team.members, 'STRIKER')),
+      MIDFIELD: Math.max(0, 2 - countRole(team.members, 'MIDFIELD')),
+      DEFENSE: Math.max(0, 2 - countRole(team.members, 'DEFENSE')),
+    }
+    if (left[role] <= 0) return { ok: false, error: `Búið að fylla ${role} (2/2).` }
+
+    if (team.budgetSpent + player.price > team.budgetInitial) {
+      return { ok: false, error: 'Fer yfir Salary Cap.' }
+    }
+
+    await prisma.team.update({
+      where: { id: team.id },
+      data: {
+        budgetSpent: { increment: player.price },
+        members: { create: { playerId: player.id, pricePaid: player.price, role, isActive: true } },
+      },
+    })
+    revalidatePath('/dashboard')
+    return { ok: true }
   }
 
-  await prisma.team.update({
-    where: { id: team.id },
-    data: {
-      budgetSpent: { increment: player.price },
-      members: {
-        create: {
-          playerId: player.id,
-          pricePaid: player.price,
-          role,
-          isActive: true,
-          activeOrder: null,
-          benchOrder: null,
-        },
-      },
-    },
+  // AFTER LOCK → exactly ONE weekly transfer (replace)
+  const existingLog = await prisma.transferLog.findUnique({
+    where: { teamId_weekId: { teamId: team.id, weekId: openWeek.id } },
   })
+  if (existingLog) return { ok: false, error: 'Þú hefur þegar notað vikuskiptin.' }
+
+  if (teamFull && !replaceTeamPlayerId) {
+    return { ok: false, error: 'Liðið er fullt. Veldu leikmann til að skipta út (replace).' }
+  }
+
+  const counts = {
+    STRIKER: countRole(team.members, 'STRIKER'),
+    MIDFIELD: countRole(team.members, 'MIDFIELD'),
+    DEFENSE: countRole(team.members, 'DEFENSE'),
+  }
+
+  // Not full → still allow adding one (counts must allow 2/role), but logs as weekly transfer
+  if (!teamFull) {
+    if (counts[role] >= 2) return { ok: false, error: `Búið að fylla ${role} (2/2).` }
+    if (team.budgetSpent + player.price > team.budgetInitial) return { ok: false, error: 'Fer yfir Salary Cap.' }
+
+    await prisma.$transaction([
+      prisma.team.update({
+        where: { id: team.id },
+        data: {
+          budgetSpent: { increment: player.price },
+          members: { create: { playerId: player.id, pricePaid: player.price, role, isActive: true } },
+        },
+      }),
+      prisma.transferLog.create({ data: { teamId: team.id, weekId: openWeek.id } }),
+    ])
+    revalidatePath('/dashboard')
+    return { ok: true }
+  }
+
+  // Full + replace flow
+  const toReplace = await prisma.teamPlayer.findUnique({ where: { id: replaceTeamPlayerId } })
+  if (!toReplace || toReplace.teamId !== team.id) return { ok: false, error: 'Ógildur replace-leikmaður.' }
+
+  const after = { ...counts }
+  after[toReplace.role as 'STRIKER' | 'MIDFIELD' | 'DEFENSE'] = Math.max(
+    0,
+    after[toReplace.role as 'STRIKER' | 'MIDFIELD' | 'DEFENSE'] - 1,
+  )
+  after[role] = (after[role] ?? 0) + 1
+  if (after.STRIKER !== 2 || after.MIDFIELD !== 2 || after.DEFENSE !== 2) {
+    return { ok: false, error: 'Stöður yrðu ekki 2/2/2 eftir skipti.' }
+  }
+
+  const newSpent = team.budgetSpent - toReplace.pricePaid + player.price
+  if (newSpent > team.budgetInitial) return { ok: false, error: 'Fer yfir Salary Cap eftir skipti.' }
+
+  await prisma.$transaction([
+    prisma.team.update({ where: { id: team.id }, data: { budgetSpent: { decrement: toReplace.pricePaid } } }),
+    prisma.teamPlayer.delete({ where: { id: toReplace.id } }),
+    prisma.team.update({
+      where: { id: team.id },
+      data: {
+        budgetSpent: { increment: player.price },
+        members: { create: { playerId: player.id, pricePaid: player.price, role, isActive: true } },
+      },
+    }),
+    prisma.transferLog.create({ data: { teamId: team.id, weekId: openWeek.id } }),
+  ])
 
   revalidatePath('/dashboard')
   return { ok: true }
@@ -128,31 +218,16 @@ export default async function Dashboard({
   const myUserId = (session.user as any).id as string
 
   // 1) Load the team we are VIEWING (own team by default, or explicit ?team=)
-  let team = null as Awaited<ReturnType<typeof prisma.team.findUnique>> | null
-  if (requestedTeamId) {
-    team = await prisma.team.findUnique({
-      where: { id: requestedTeamId },
-      include: { members: { include: { player: { include: { rlTeam: true } } } } },
-    })
-  } else {
-    team = await prisma.team.findUnique({
-      where: { userId: myUserId },
-      include: { members: { include: { player: { include: { rlTeam: true } } } } },
-    })
-  }
-
-  // 2) Market data only if we're viewing our own team
-  const viewingOwn = !!team && team.userId === myUserId
-  const [players, openWeek] = await Promise.all([
-    viewingOwn
-      ? prisma.player.findMany({
-          where: q ? { name: { contains: q, mode: 'insensitive' } } : undefined,
-          include: { rlTeam: true },
-          orderBy: sort === 'price_asc' ? { price: 'asc' } : { price: 'desc' },
+  let team =
+    requestedTeamId
+      ? await prisma.team.findUnique({
+          where: { id: requestedTeamId },
+          include: { members: { include: { player: { include: { rlTeam: true } } } } },
         })
-      : Promise.resolve([] as any[]),
-    prisma.week.findFirst({ where: { isLocked: false }, orderBy: { number: 'asc' } }),
-  ])
+      : await prisma.team.findUnique({
+          where: { userId: myUserId },
+          include: { members: { include: { player: { include: { rlTeam: true } } } } },
+        })
 
   // If user has no team AND not explicitly viewing someone else → show create form
   if (!team && !requestedTeamId) {
@@ -161,37 +236,55 @@ export default async function Dashboard({
         <h1 className="text-2xl font-semibold">Liðið mitt</h1>
         <p>Engin lið — stofnaðu hér.</p>
         <form action={createTeam} className="flex items-center gap-2">
-          <input name="name" placeholder="Heiti liðs" className="bg-neutral-900 border border-neutral-700 rounded px-3 py-2" />
+          <input
+            name="name"
+            placeholder="Heiti liðs"
+            className="bg-neutral-900 border border-neutral-700 rounded px-3 py-2"
+          />
           <button className="bg-white text-black rounded px-4 py-2 cursor-pointer">Stofna lið</button>
         </form>
       </div>
     )
   }
+  if (!team) return <div>Lið fannst ekki.</div>
 
-  if (!team) {
-    // Bad team id in URL
-    return <div>Lið fannst ekki.</div>
-  }
+  const viewingOwn = !!team && team.userId === myUserId
+  const openWeek = await getOpenWeek()
+  const lockedMarket = !openWeek
 
-  const owned = new Set(team.members.map(m => m.playerId))
+  // If viewing own, load market list; otherwise, skip
+  const players = viewingOwn
+    ? await prisma.player.findMany({
+        where: q ? { name: { contains: q, mode: 'insensitive' } } : undefined,
+        include: { rlTeam: true },
+        orderBy: sort === 'price_asc' ? { price: 'asc' } : { price: 'desc' },
+      })
+    : ([] as any[])
+
+  // Weekly transfer used?
+  const usedThisWeek =
+    viewingOwn && openWeek
+      ? !!(await prisma.transferLog.findUnique({
+          where: { teamId_weekId: { teamId: team.id, weekId: openWeek.id } },
+        }))
+      : false
+
+  const owned = new Set(team.members.map((m) => m.playerId))
   const budgetLeft = team.budgetInitial - team.budgetSpent
-  const locked = !openWeek
   const isTeamFull = team.members.length >= 6
 
-  const countByRole = (r: string) => team.members.filter(m => m.role === r).length
   const rolesLeft = viewingOwn
     ? {
-        STRIKER: Math.max(0, 2 - countByRole('STRIKER')),
-        MIDFIELD: Math.max(0, 2 - countByRole('MIDFIELD')),
-        DEFENSE: Math.max(0, 2 - countByRole('DEFENSE')),
+        STRIKER: Math.max(0, 2 - countRole(team.members, 'STRIKER')),
+        MIDFIELD: Math.max(0, 2 - countRole(team.members, 'MIDFIELD')),
+        DEFENSE: Math.max(0, 2 - countRole(team.members, 'DEFENSE')),
       }
     : { STRIKER: 0, MIDFIELD: 0, DEFENSE: 0 }
 
-  // Prepare items for TeamField
-  const byRole = (r: 'STRIKER'|'MIDFIELD'|'DEFENSE') =>
+  const byRole = (r: 'STRIKER' | 'MIDFIELD' | 'DEFENSE') =>
     team.members
-      .filter(m => m.role === r)
-      .map(m => ({
+      .filter((m) => m.role === r)
+      .map((m) => ({
         id: m.id,
         name: m.player.name,
         role: r,
@@ -200,8 +293,21 @@ export default async function Dashboard({
       }))
 
   const strikers = byRole('STRIKER')
-  const mids     = byRole('MIDFIELD')
-  const defs     = byRole('DEFENSE')
+  const mids = byRole('MIDFIELD')
+  const defs = byRole('DEFENSE')
+
+  const canLockNow =
+    viewingOwn &&
+    !team.isLockedIn &&
+    team.members.length === 6 &&
+    countRole(team.members, 'STRIKER') === 2 &&
+    countRole(team.members, 'MIDFIELD') === 2 &&
+    countRole(team.members, 'DEFENSE') === 2
+
+  const replaceOptions = team.members.map((m) => ({
+    id: m.id,
+    label: `${m.player.name} · ${m.role}`,
+  }))
 
   return (
     <div className="space-y-6">
@@ -210,24 +316,57 @@ export default async function Dashboard({
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="min-w-0">
             <h1 className="text-2xl font-semibold truncate">
-              {viewingOwn ? <>Liðið mitt — <span className="text-neutral-200">{team.name}</span></> : <>{team.name}</>}
+              {viewingOwn ? (
+                <>
+                  Liðið mitt — <span className="text-neutral-200">{team.name}</span>
+                </>
+              ) : (
+                <>{team.name}</>
+              )}
             </h1>
             <p className="text-sm text-neutral-400 truncate">
               6 leikmenn: 2× Striker · 2× Midfield · 2× Defense.
               {!viewingOwn && <span className="ml-2 text-neutral-500">(skoðunaraðgerð — ekki hægt að breyta)</span>}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {viewingOwn && (
               <span className="text-xs rounded-full border border-neutral-700 px-3 py-1 text-neutral-300">
                 Salary left: ${budgetLeft}
               </span>
             )}
-            {!openWeek && (
+            {lockedMarket && (
               <span className="text-xs rounded-full border border-yellow-700/40 bg-yellow-500/10 text-yellow-200 px-3 py-1">
                 Markaður læstur
               </span>
             )}
+            {viewingOwn && team.isLockedIn ? (
+              <>
+                <span className="text-xs rounded-full border border-blue-700/40 bg-blue-500/10 text-blue-200 px-3 py-1">
+                  Lið staðfest
+                </span>
+                {openWeek && usedThisWeek && (
+                  <span className="text-xs rounded-full border border-neutral-700 px-3 py-1 text-neutral-300">
+                    Vikuskipti notuð
+                  </span>
+                )}
+              </>
+            ) : viewingOwn ? (
+              <>
+                <span className="text-xs rounded-full border border-emerald-700/40 bg-emerald-500/10 text-emerald-200 px-3 py-1">
+                  Ótakmörkuð skipti þar til staðfest
+                </span>
+                <form action={lockTeamAction}>
+                  <button
+                    disabled={!canLockNow}
+                    className="text-xs rounded px-3 py-1 bg-white text-black disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+                    title={!canLockNow ? 'Þarft 6 leikmenn og 2/2/2 stöður' : 'Staðfesta lið'}
+                  >
+                    Staðfesta lið
+                  </button>
+                </form>
+              </>
+            ) : null}
           </div>
         </div>
       </div>
@@ -242,12 +381,7 @@ export default async function Dashboard({
             defs={defs as any}
             canEdit={viewingOwn && !!openWeek}
           />
-          <p className="mt-3 text-xs text-neutral-400">
-            Dragðu og slepptu til að skipta um stöður þegar markaðurinn er opinn.
-          </p>
-          <p className="mt-3 text-xs text-neutral-400">
-            📱 Á síma: Ýttu á sætin til að færa eða skipta.
-          </p>
+          <p className="mt-3 text-xs text-neutral-400">Dragðu & slepptu (eða pikkaðu 2 sæti á síma) til að færa stöður þegar markaður er opinn.</p>
         </section>
 
         {/* MARKET (only if viewing own team) */}
@@ -262,11 +396,7 @@ export default async function Dashboard({
                   placeholder="Leita að leikmanni…"
                   className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2 w-56"
                 />
-                <select
-                  name="sort"
-                  defaultValue={sort}
-                  className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2"
-                >
+                <select name="sort" defaultValue={sort} className="bg-neutral-900 border border-neutral-800 rounded px-3 py-2">
                   <option value="price_desc">Dýrast fyrst</option>
                   <option value="price_asc">Ódýrast fyrst</option>
                 </select>
@@ -274,46 +404,43 @@ export default async function Dashboard({
               </form>
             </div>
 
-            {!openWeek && (
+            {lockedMarket && (
               <div className="rounded-lg border border-yellow-700/40 bg-yellow-500/10 text-yellow-200 text-sm px-3 py-2">
                 Markaður er læstur þessa stundina.
               </div>
             )}
 
-            {isTeamFull && (
+            {/* If team full and NOT locked-in, suggest sell first */}
+            {isTeamFull && !team.isLockedIn && (
               <div className="rounded-lg border border-neutral-700 text-neutral-200 text-sm px-3 py-2">
-                Liðið þitt er fullt (6 leikmenn). Seldu leikmann áður en þú bætir við nýjum.
+                Liðið þitt er fullt (6 leikmenn). Seldu leikmann áður en þú bætir við — eða staðfestu liðið og notaðu “replace” eftir það.
               </div>
             )}
 
             <ul className="grid sm:grid-cols-2 xl:grid-cols-3 gap-4">
-              {players.map(p => {
+              {players.map((p) => {
                 const cannotAfford = p.price > budgetLeft
-                const subtitle = p.rlTeam?.name || '—'
-                const hideBuy = isTeamFull || owned.has(p.id) || !openWeek
+                const hideBuy = owned.has(p.id) || lockedMarket || (!team.isLockedIn && isTeamFull)
+                const teamName = p.rlTeam?.name || null
+                const logo = logoForTeamName(teamName)
                 return (
                   <li key={p.id} className="rounded-xl border border-neutral-800 p-4 hover:border-neutral-600 transition">
                     <div className="flex items-baseline justify-between gap-2">
-                      <div className="min-w-0 flex items-cen  ter gap-3">
-                        {/* TEAM LOGO (square) */}
-                        {(() => {
-                          const teamName = p.rlTeam?.name || null
-                          const logo = logoForTeamName(teamName)
-                          return logo ? (
-                            <img
-                              src={logo}
-                              alt={teamName || 'Lið'}
-                              className="w-8 h-8 border border-neutral-700 object-cover rounded-none"
-                            />
-                          ) : (
-                            <div className="w-8 h-8 border border-neutral-700 grid place-items-center text-[10px] text-neutral-300 rounded-none">
-                              RL
-                            </div>
-                          )
-                        })()}
+                      <div className="min-w-0 flex items-center gap-3">
+                        {logo ? (
+                          <img
+                            src={logo}
+                            alt={teamName || 'Lið'}
+                            className="w-8 h-8 border border-neutral-700 object-cover rounded-none"
+                          />
+                        ) : (
+                          <div className="w-8 h-8 border border-neutral-700 grid place-items-center text-[10px] text-neutral-300 rounded-none">
+                            RL
+                          </div>
+                        )}
                         <div className="min-w-0">
                           <div className="font-medium truncate">{p.name}</div>
-                          <div className="text-xs text-neutral-400 truncate">{p.rlTeam?.name ?? '—'}</div>
+                          <div className="text-xs text-neutral-400 truncate">{teamName ?? '—'}</div>
                         </div>
                       </div>
                       <div className="text-sm text-neutral-300 whitespace-nowrap">${p.price}</div>
@@ -331,17 +458,19 @@ export default async function Dashboard({
                             playerId={p.id}
                             action={buyAction}
                             owned={false}
-                            disabled={cannotAfford}
+                            disabled={!team.isLockedIn && cannotAfford}
                             rolesLeft={rolesLeft}
+                            locked={!!team.isLockedIn}
+                            teamFull={isTeamFull}
+                            replaceOptions={isTeamFull && team.isLockedIn ? replaceOptions : []}
                           />
                         )}
-                        {!hideBuy && cannotAfford && (
+                        {!hideBuy && !team.isLockedIn && cannotAfford && (
                           <p className="text-xs text-red-400 mt-2">Fer yfir Salary Cap.</p>
                         )}
-                        {isTeamFull && !owned.has(p.id) && (
-                          <p className="text-xs text-gray-400 mt-2">
-                            Liðið er fullt — seldu leikmann áður en þú bætir við.
-                          </p>
+                        {/* If full and locked-in, BuyButton shows replace select so no extra message needed */}
+                        {isTeamFull && team.isLockedIn && !owned.has(p.id) && (
+                          <p className="text-xs text-neutral-400 mt-2">Liðið er fullt — notaðu „Skipta (kaupa)“ hér að ofan.</p>
                         )}
                       </>
                     )}

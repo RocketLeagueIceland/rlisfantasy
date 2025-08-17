@@ -1,0 +1,22 @@
+BEGIN TRY
+
+BEGIN TRAN;
+
+-- AlterTable
+ALTER TABLE [dbo].[Team] DROP CONSTRAINT [Team_budgetInitial_df];
+ALTER TABLE [dbo].[Team] ADD CONSTRAINT [Team_budgetInitial_df] DEFAULT 10000000 FOR [budgetInitial];
+ALTER TABLE [dbo].[Team] ADD [isLockedIn] BIT NOT NULL CONSTRAINT [Team_isLockedIn_df] DEFAULT 0,
+[lockedInAt] DATETIME2;
+
+COMMIT TRAN;
+
+END TRY
+BEGIN CATCH
+
+IF @@TRANCOUNT > 0
+BEGIN
+    ROLLBACK TRAN;
+END;
+THROW
+
+END CATCH
