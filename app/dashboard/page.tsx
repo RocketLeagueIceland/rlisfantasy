@@ -106,26 +106,30 @@ export async function buyAction(...args: any[]) {
   const playerId = String(formData.get('playerId') || '')
   const role = String(formData.get('role') || '') as 'STRIKER' | 'MIDFIELD' | 'DEFENSE'
   const replaceTeamPlayerId = String(formData.get('replaceTeamPlayerId') || '')
+
   if (!playerId) return { ok: false, error: 'Vantar leikmann.' }
   if (!['STRIKER', 'MIDFIELD', 'DEFENSE'].includes(role)) return { ok: false, error: 'Veldu stöðu.' }
 
-  const [team, player, openWeek] = await Promise.all([
+  // Fetch team + player (do NOT require openWeek yet; pre-lock is unlimited)
+  const [team, player] = await Promise.all([
     prisma.team.findUnique({ where: { userId }, include: { members: true } }),
     prisma.player.findUnique({ where: { id: playerId } }),
-    getOpenWeek(),
   ])
   if (!team) return { ok: false, error: 'Þú þarft að stofna lið fyrst.' }
   if (!player) return { ok: false, error: 'Leikmaður fannst ekki.' }
-  if (!openWeek) return { ok: false, error: 'Markaður er læstur.' }
   if (team.members.some((m) => m.playerId === player.id)) {
     return { ok: false, error: 'Leikmaður er þegar í liðinu.' }
   }
 
   const teamFull = team.members.length >= 6
 
-  // BEFORE LOCK → unlimited (within constraints)
+  // -----------------------------
+  // PRE-LOCK: unlimited changes (respect 2/role, cap, size)
+  // -----------------------------
   if (!team.isLockedIn) {
-    if (teamFull) return { ok: false, error: 'Liðið er fullt (6). Seldu fyrst eða staðfestu liðið og notaðu „replace“.' }
+    if (teamFull) {
+      return { ok: false, error: 'Liðið er fullt (6). Seldu fyrst eða staðfestu liðið og notaðu „replace“.' }
+    }
 
     const left = {
       STRIKER: Math.max(0, 2 - countRole(team.members, 'STRIKER')),
@@ -149,15 +153,17 @@ export async function buyAction(...args: any[]) {
     return { ok: true }
   }
 
-  // AFTER LOCK → exactly ONE weekly transfer (replace)
+  // -----------------------------
+  // POST-LOCK: exactly ONE weekly transfer
+  // -----------------------------
+  const openWeek = await getOpenWeek()
+  if (!openWeek) return { ok: false, error: 'Markaður er læstur.' }
+
+  // Already used transfer this week?
   const existingLog = await prisma.transferLog.findUnique({
     where: { teamId_weekId: { teamId: team.id, weekId: openWeek.id } },
   })
   if (existingLog) return { ok: false, error: 'Þú hefur þegar notað vikuskiptin.' }
-
-  if (teamFull && !replaceTeamPlayerId) {
-    return { ok: false, error: 'Liðið er fullt. Veldu leikmann til að skipta út (replace).' }
-  }
 
   const counts = {
     STRIKER: countRole(team.members, 'STRIKER'),
@@ -165,7 +171,7 @@ export async function buyAction(...args: any[]) {
     DEFENSE: countRole(team.members, 'DEFENSE'),
   }
 
-  // Not full → still allow adding one (counts must allow 2/role), but logs as weekly transfer
+  // Team NOT full → allow adding one (still respect 2/role & cap), and log transfer
   if (!teamFull) {
     if (counts[role] >= 2) return { ok: false, error: `Búið að fylla ${role} (2/2).` }
     if (team.budgetSpent + player.price > team.budgetInitial) return { ok: false, error: 'Fer yfir Salary Cap.' }
@@ -184,20 +190,24 @@ export async function buyAction(...args: any[]) {
     return { ok: true }
   }
 
-  // Full + replace flow
+  // Team FULL → require replace flow
+  if (!replaceTeamPlayerId) {
+    return { ok: false, error: 'Liðið er fullt. Veldu leikmann til að skipta út (replace).' }
+  }
+
   const toReplace = await prisma.teamPlayer.findUnique({ where: { id: replaceTeamPlayerId } })
   if (!toReplace || toReplace.teamId !== team.id) return { ok: false, error: 'Ógildur replace-leikmaður.' }
 
+  // Check 2/2/2 after replacement
   const after = { ...counts }
-  after[toReplace.role as 'STRIKER' | 'MIDFIELD' | 'DEFENSE'] = Math.max(
-    0,
-    after[toReplace.role as 'STRIKER' | 'MIDFIELD' | 'DEFENSE'] - 1,
-  )
+  const oldRole = (toReplace.role || 'MIDFIELD') as 'STRIKER' | 'MIDFIELD' | 'DEFENSE'
+  after[oldRole] = Math.max(0, after[oldRole] - 1)
   after[role] = (after[role] ?? 0) + 1
   if (after.STRIKER !== 2 || after.MIDFIELD !== 2 || after.DEFENSE !== 2) {
     return { ok: false, error: 'Stöður yrðu ekki 2/2/2 eftir skipti.' }
   }
 
+  // Salary after swap
   const newSpent = team.budgetSpent - toReplace.pricePaid + player.price
   if (newSpent > team.budgetInitial) return { ok: false, error: 'Fer yfir Salary Cap eftir skipti.' }
 
@@ -217,6 +227,7 @@ export async function buyAction(...args: any[]) {
   revalidatePath('/dashboard')
   return { ok: true }
 }
+
 
 // -----------------------------
 // Page
@@ -470,7 +481,7 @@ export default async function Dashboard({
             strikers={strikers as any}
             mids={mids as any}
             defs={defs as any}
-            canEdit={viewingOwn && !!openWeek}
+            canEdit={viewingOwn && (!team.isLockedIn || !!openWeek)}
           />
           <p className="mt-3 text-xs text-neutral-400">
             Dragðu & slepptu (eða pikkaðu 2 sæti á síma) til að færa stöður þegar markaður er opinn.
@@ -513,7 +524,10 @@ export default async function Dashboard({
             <ul className="grid sm:grid-cols-2 xl:grid-cols-3 gap-4">
               {players.map((p) => {
                 const cannotAfford = p.price > budgetLeft
-                const hideBuy = owned.has(p.id) || lockedMarket || (!team.isLockedIn && isTeamFull)
+                const hideBuy =
+                  owned.has(p.id) ||
+                  (team.isLockedIn ? lockedMarket : false) || // only hide on closed market AFTER lock-in
+                  (!team.isLockedIn && isTeamFull)
                 const teamName = p.rlTeam?.name || null
                 const logo = logoForTeamName(teamName)
                 return (

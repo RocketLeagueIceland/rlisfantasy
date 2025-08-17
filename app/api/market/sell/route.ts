@@ -9,8 +9,8 @@ export async function POST(req: Request) {
   const session = await getServerSession(authOptions)
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  // Markaður þarf að vera opinn
-  let week: any = null
+  // Market must be open; also gives us the active week (for transfer logging)
+  let week: { id: string } | null = null
   try {
     week = await assertMarketOpen()
   } catch (e: any) {
@@ -27,7 +27,17 @@ export async function POST(req: Request) {
 
   const count = await prisma.teamPlayer.count({ where: { teamId: team.id } })
 
-  // Ef liðið er fullt → þetta er vikuskipti
+  // If team is NOT locked in → unlimited sells (no weekly transfer consumed)
+  if (!team.isLockedIn) {
+    await prisma.$transaction([
+      prisma.team.update({ where: { id: team.id }, data: { budgetSpent: { decrement: tp.pricePaid } } }),
+      prisma.teamPlayer.delete({ where: { id: tp.id } }),
+    ])
+    return NextResponse.json({ ok: true })
+  }
+
+  // Team IS locked in:
+  // If currently full (6) then this SELL consumes the weekly transfer
   if (count >= 6) {
     try {
       await assertTransferAvailable(team.id, count)
@@ -44,7 +54,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true })
   }
 
-  // Annars (liðið ekki fullt enn) má selja án viku-takmörkunar
+  // Locked-in but not full → allow selling without consuming the transfer
   await prisma.$transaction([
     prisma.team.update({ where: { id: team.id }, data: { budgetSpent: { decrement: tp.pricePaid } } }),
     prisma.teamPlayer.delete({ where: { id: tp.id } }),
