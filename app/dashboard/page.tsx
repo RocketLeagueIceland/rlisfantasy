@@ -2,7 +2,7 @@ import { prisma } from '@/lib/prisma'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { revalidatePath } from 'next/cache'
-import { SALARY_CAP } from '@/lib/config'
+import { SALARY_CAP, POINTS, POSITION_BONUS_MULTIPLIER } from '@/lib/config'
 import TeamField from '@/components/team-field'
 import { BuyButton } from '@/components/buy-button'
 import { redirect } from 'next/navigation'
@@ -25,6 +25,25 @@ async function getOpenWeek() {
   return prisma.week.findFirst({ where: { isLocked: false }, orderBy: { number: 'asc' } })
 }
 
+// points per stat including position bonus (matches computeWeekPointsFanRL)
+function statPointsWithBonus(stats: any, role: 'STRIKER'|'MIDFIELD'|'DEFENSE'|null|undefined) {
+  const mult = POSITION_BONUS_MULTIPLIER ?? 1
+  const goals  = Number(stats?.goals  || 0)
+  const assists= Number(stats?.assists|| 0)
+  const saves  = Number(stats?.saves  || 0)
+  const shots  = Number(stats?.shots  || 0)
+  const score  = Number(stats?.score  || 0)
+
+  const goalPts   = goals   * POINTS.goal   * (role === 'STRIKER' ? mult : 1)
+  const assistPts = assists * POINTS.assist * (role === 'MIDFIELD' ? mult : 1)
+  const savePts   = saves   * POINTS.save   * (role === 'DEFENSE' ? mult : 1)
+  const shotPts   = shots   * POINTS.shot
+  const scorePts  = score   * POINTS.score
+
+  const total = goalPts + assistPts + savePts + shotPts + scorePts
+  return { goalPts, assistPts, savePts, shotPts, scorePts, total }
+}
+
 // -----------------------------
 // Server Actions
 // -----------------------------
@@ -40,6 +59,7 @@ export async function createTeam(formData: FormData) {
   redirect('/dashboard')
 }
 
+/** Lock/confirm initial team (pre-season unlimited → post-lock weekly 1 transfer) */
 export async function lockTeamAction() {
   'use server'
   const session = await getServerSession(authOptions)
@@ -309,6 +329,79 @@ export default async function Dashboard({
     label: `${m.player.name} · ${m.role}`,
   }))
 
+  // -----------------------------
+  // Per-week breakdown (TeamWeekScore)
+  // -----------------------------
+  const weekScoresRaw = await prisma.teamWeekScore.findMany({
+    where: { teamId: team.id },
+    include: { week: true },
+  })
+  const weekScores = [...weekScoresRaw].sort((a, b) => b.week.number - a.week.number)
+
+  const allIds = new Set<string>()
+  for (const ws of weekScores) {
+    try {
+      const arr = JSON.parse(ws.breakdown || '[]') as any[]
+      for (const e of arr) if (e?.playerId) allIds.add(String(e.playerId))
+    } catch {}
+  }
+  const idList = Array.from(allIds)
+  const playersForMap = idList.length
+    ? await prisma.player.findMany({ where: { id: { in: idList } }, include: { rlTeam: true } })
+    : []
+  const playerMap = new Map(playersForMap.map(p => [p.id, p]))
+
+  function aggregateWeek(ws: any) {
+    let total = 0
+    type Row = {
+      playerId: string
+      role: string | null
+      goals: number; assists: number; saves: number; shots: number; score: number
+      gPts: number; aPts: number; sPts: number; shPts: number; scPts: number
+      points: number
+    }
+    const perPlayer = new Map<string, Row>()
+    let arr: any[] = []
+    try { arr = JSON.parse(ws.breakdown || '[]') } catch { arr = [] }
+
+    for (const e of arr) {
+      const pid = String(e.playerId)
+      const role = (e.role || null) as 'STRIKER'|'MIDFIELD'|'DEFENSE'|null
+      const stats = e.stats || {}
+      const { goalPts, assistPts, savePts, shotPts, scorePts, total: rowTotal } = statPointsWithBonus(stats, role)
+
+      total += rowTotal
+
+      if (!perPlayer.has(pid)) {
+        perPlayer.set(pid, {
+          playerId: pid, role,
+          goals: Number(stats.goals || 0),
+          assists: Number(stats.assists || 0),
+          saves: Number(stats.saves || 0),
+          shots: Number(stats.shots || 0),
+          score: Number(stats.score || 0),
+          gPts: goalPts, aPts: assistPts, sPts: savePts, shPts: shotPts, scPts: scorePts,
+          points: rowTotal,
+        })
+      } else {
+        const r = perPlayer.get(pid)!
+        r.goals += Number(stats.goals || 0)
+        r.assists += Number(stats.assists || 0)
+        r.saves += Number(stats.saves || 0)
+        r.shots += Number(stats.shots || 0)
+        r.score += Number(stats.score || 0)
+        r.gPts += goalPts
+        r.aPts += assistPts
+        r.sPts += savePts
+        r.shPts += shotPts
+        r.scPts += scorePts
+        r.points += rowTotal
+      }
+    }
+    const rows = Array.from(perPlayer.values()).sort((a,b) => b.points - a.points)
+    return { total, rows }
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -317,9 +410,7 @@ export default async function Dashboard({
           <div className="min-w-0">
             <h1 className="text-2xl font-semibold truncate">
               {viewingOwn ? (
-                <>
-                  Liðið mitt — <span className="text-neutral-200">{team.name}</span>
-                </>
+                <>Liðið mitt — <span className="text-neutral-200">{team.name}</span></>
               ) : (
                 <>{team.name}</>
               )}
@@ -381,7 +472,9 @@ export default async function Dashboard({
             defs={defs as any}
             canEdit={viewingOwn && !!openWeek}
           />
-          <p className="mt-3 text-xs text-neutral-400">Dragðu & slepptu (eða pikkaðu 2 sæti á síma) til að færa stöður þegar markaður er opinn.</p>
+          <p className="mt-3 text-xs text-neutral-400">
+            Dragðu & slepptu (eða pikkaðu 2 sæti á síma) til að færa stöður þegar markaður er opinn.
+          </p>
         </section>
 
         {/* MARKET (only if viewing own team) */}
@@ -490,6 +583,119 @@ export default async function Dashboard({
           <code className="mx-1">?team=</code> stiku.
         </div>
       )}
+
+            {/* ----------------------------- */}
+      {/* Breakdown per week            */}
+      {/* ----------------------------- */}
+      <section className="space-y-3">
+        <h2 className="text-xl font-medium">Niðurbrot eftir vikum</h2>
+
+        {weekScores.length === 0 && (
+          <div className="rounded-xl border border-neutral-800 p-4 text-sm text-neutral-400">
+            Engin stig til að sýna ennþá. Þegar tölfræði hefur verið hlaðið inn og stig reiknuð birtast vikur hér.
+          </div>
+        )}
+
+        {weekScores.map(ws => {
+          const { total, rows } = aggregateWeek(ws)
+          return (
+            <details key={ws.id} className="rounded-xl border border-neutral-800">
+              <summary className="list-none cursor-pointer select-none px-4 py-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="inline-flex items-center text-xs px-2 py-0.5 rounded-full border border-neutral-700 text-neutral-300">
+                    Vika {ws.week.number}
+                  </span>
+                  <span className="text-neutral-400 text-sm">
+                    {new Date(ws.week.startDate).toLocaleDateString('is-IS')}
+                  </span>
+                </div>
+                <div className="text-sm">
+                  <span className="text-neutral-400 mr-2">Samtals</span>
+                  <span className="font-medium">{Math.round(total)} stig</span>
+                </div>
+              </summary>
+
+              <div className="px-4 pb-4">
+                <div className="overflow-x-auto rounded-lg border border-neutral-900">
+                  <table className="w-full text-sm">
+                    <thead className="bg-neutral-950/60">
+                      <tr className="[&>th]:px-3 [&>th]:py-2 text-left text-neutral-300">
+                        <th>Leikmaður</th>
+                        <th className="hidden sm:table-cell">Hlutverk</th>
+                        <th className="hidden md:table-cell">Mörk</th>
+                        <th className="hidden md:table-cell">Stoð</th>
+                        <th className="hidden md:table-cell">Varslur</th>
+                        <th className="hidden lg:table-cell">Skot</th>
+                        <th className="hidden lg:table-cell">Score</th>
+                        <th className="text-right">Samtals</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map(r => {
+                        const p = playerMap.get(r.playerId)
+                        const teamName = p?.rlTeam?.name || null
+                        const logo = logoForTeamName(teamName)
+                        return (
+                          <tr key={r.playerId} className="border-t border-neutral-900 align-middle">
+                            <td className="[&>div]:py-2 px-3">
+                              <div className="flex items-center gap-2 min-w-0">
+                                {logo ? (
+                                  <img
+                                    src={logo}
+                                    alt={teamName || 'Lið'}
+                                    className="w-6 h-6 border border-neutral-700 object-cover rounded-none"
+                                  />
+                                ) : (
+                                  <div className="w-6 h-6 border border-neutral-700 grid place-items-center text-[9px] text-neutral-300 rounded-none">RL</div>
+                                )}
+                                <div className="min-w-0">
+                                  <div className="truncate">{p?.name ?? '—'}</div>
+                                  <div className="text-[10px] text-neutral-400 truncate">{teamName ?? '—'}</div>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="hidden sm:table-cell px-3">
+                              <span className="text-[11px] uppercase tracking-wide text-neutral-300">{r.role || '—'}</span>
+                            </td>
+
+                            {/* Stats with points in parentheses */}
+                            <td className="hidden md:table-cell px-3">
+                              {r.goals}{' '}
+                              <span className="text-neutral-400">({Math.round(r.gPts)})</span>
+                            </td>
+                            <td className="hidden md:table-cell px-3">
+                              {r.assists}{' '}
+                              <span className="text-neutral-400">({Math.round(r.aPts)})</span>
+                            </td>
+                            <td className="hidden md:table-cell px-3">
+                              {r.saves}{' '}
+                              <span className="text-neutral-400">({Math.round(r.sPts)})</span>
+                            </td>
+                            <td className="hidden lg:table-cell px-3">
+                              {r.shots}{' '}
+                              <span className="text-neutral-400">({Math.round(r.shPts)})</span>
+                            </td>
+                            <td className="hidden lg:table-cell px-3">
+                              {r.score}{' '}
+                              <span className="text-neutral-400">({Math.round(r.scPts)})</span>
+                            </td>
+
+                            <td className="px-3 text-right font-medium">{Math.round(r.points)}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                <p className="mt-2 text-xs text-neutral-500">
+                  Stigin í svigum við hvern dálk eru reiknuð út frá stigagjöf og innihalda stöðubónus (t.d. Striker → Mörk).
+                </p>
+              </div>
+            </details>
+          )
+        })}
+      </section>
     </div>
   )
 }
