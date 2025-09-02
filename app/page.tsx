@@ -46,11 +46,11 @@ export default function Page() {
             <li>🧤 Varsla: <strong>25</strong></li>
             <li>🥅 Skot: <strong>15</strong></li>
             <li className="col-span-2">
-              📊 Taflustig (scoreboard): <strong>1</strong> fyrir hvert stig
+              📊 Töflustig (scoreboard): <strong>1</strong> fyrir hvert stig
             </li>
           </ul>
           <p className="mt-3 text-xs text-neutral-400">
-            Ath: <em>Demo</em> telst ekki til stiga.
+            Ath: <em>Tortímingar</em> teljast ekki til stiga. því miður......
           </p>
         </div>
 
@@ -79,7 +79,7 @@ export default function Page() {
             <li>🛠️ Stjórnandi getur einnig læst/aflæst handvirkt.</li>
           </ul>
           <p className="mt-3 text-xs text-neutral-400">
-            Stig eru endurreiknuð eftir hverja viku út frá innsendingu tölfræði (Admin → Hlaða inn tölfræði).
+            Stig eru reiknuð eftir hverja útsendingu.
           </p>
         </div>
       </section>

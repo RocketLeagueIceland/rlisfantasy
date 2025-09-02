@@ -91,7 +91,7 @@ export default function HowToPlay() {
             </div>
             <div>
               <dt className="text-neutral-200">Hvenær get ég keypt/selt?</dt>
-              <dd className="text-neutral-400">Þegar markaður er opinn. Markaðurinn er lokaður þegar .</dd>
+              <dd className="text-neutral-400">Þegar markaður er opinn. Markaðurinn er lokaður þegar leikir standa yfir. Stjórnendur geta líka lokað markaðnum handvirkt.</dd>
             </div>
             <div>
               <dt className="text-neutral-200">Hvernig breytist verð?</dt>
