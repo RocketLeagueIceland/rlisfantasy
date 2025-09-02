@@ -6,9 +6,11 @@ import Image from 'next/image'
 import { Menu, X } from 'lucide-react'
 import { AuthButton } from '@/components/auth-button'
 import { AdminLink } from '@/components/admin-link'
+import { useSession } from 'next-auth/react'
 
 export default function SiteHeader() {
   const [open, setOpen] = useState(false)
+  const { data: session } = useSession()
 
   // Loka scrolling þegar valmynd er opin
   useEffect(() => {
@@ -40,7 +42,7 @@ export default function SiteHeader() {
         <nav className="hidden md:flex items-center gap-6 text-sm">
           <Link className="hover:underline" href="/how-to-play">Hvernig virkar?</Link>
           <Link className="hover:underline" href="/leaderboard">Stigatafla</Link>
-          <Link className="hover:underline" href="/dashboard">Liðið mitt</Link>
+          {session && <Link className="hover:underline" href="/dashboard">Liðið mitt</Link>}
           <AdminLink />
           <AuthButton />
         </nav>

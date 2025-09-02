@@ -1,9 +1,11 @@
 // app/page.tsx
 import Link from 'next/link'
+import { getServerSession } from 'next-auth'
 
 export const dynamic = 'force-dynamic'
 
-export default function Page() {
+export default async function Page() {
+  const session = await getServerSession()
   return (
     <div className="space-y-10">
       {/* HERO */}
@@ -19,9 +21,11 @@ export default function Page() {
             Stöðubónus er <strong>2×</strong> fyrir tengdu tölfræðina.
           </p>
           <div className="mt-6 flex flex-wrap gap-3">
+            {session && (
             <Link href="/dashboard" className="rounded-xl px-5 py-3 bg-white text-black font-medium hover:opacity-90">
               Byrja núna
             </Link>
+            )}
             <Link href="/how-to-play" className="rounded-xl px-5 py-3 border border-neutral-700 hover:bg-neutral-900">
               Hvernig virkar?
             </Link>
@@ -107,9 +111,16 @@ export default function Page() {
           </li>
         </ol>
         <div className="mt-5">
+          {session && (
           <Link href="/dashboard" className="inline-block rounded-xl px-5 py-3 bg-white text-black font-medium hover:opacity-90">
             Áfram á „Liðið mitt“
           </Link>
+          )}
+          {!session && (
+          <p className="inline-block rounded-xl px-5 py-3 bg-white text-black font-medium hover:opacity-90">
+            Skráðu þig inn til að byrja
+          </p>
+          )}
         </div>
       </section>
     </div>

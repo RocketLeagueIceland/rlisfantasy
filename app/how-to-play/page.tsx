@@ -1,6 +1,8 @@
 import Link from 'next/link'
+import { getServerSession } from 'next-auth'
 
-export default function HowToPlay() {
+export default async function HowToPlay() {
+  const session = await getServerSession()
   return (
     <div className="space-y-8">
       {/* HERO */}
@@ -11,7 +13,7 @@ export default function HowToPlay() {
           Stöður hækka tengda tölfræði <span className="font-semibold">2×</span> (sjá hér að neðan).
         </p>
         <div className="mt-4 flex flex-wrap gap-3">
-          <Link href="/dashboard" className="rounded-xl px-4 py-2 bg-white text-black text-sm">Byrja núna</Link>
+          {session && <Link href="/dashboard" className="rounded-xl px-4 py-2 bg-white text-black text-sm">Byrja núna</Link>}
           <Link href="/leaderboard" className="rounded-xl px-4 py-2 border border-neutral-700 text-sm">Sjá stigatöflu</Link>
         </div>
       </section>
@@ -110,7 +112,7 @@ export default function HowToPlay() {
 
       {/* CTA */}
       <section className="flex flex-wrap gap-3">
-        <Link href="/dashboard" className="rounded-xl px-4 py-2 bg-white text-black text-sm">Setja upp lið</Link>
+        {session && <Link href="/dashboard" className="rounded-xl px-4 py-2 bg-white text-black text-sm">Setja upp lið</Link>}
         <Link href="/leaderboard" className="rounded-xl px-4 py-2 border border-neutral-700 text-sm">Skoða stigatöflu</Link>
       </section>
     </div>
