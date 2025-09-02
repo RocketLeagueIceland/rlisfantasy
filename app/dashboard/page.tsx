@@ -638,7 +638,7 @@ export default async function Dashboard({
                         <th className="hidden sm:table-cell">Hlutverk</th>
                         <th className="hidden md:table-cell">Mörk</th>
                         <th className="hidden md:table-cell">Stoð</th>
-                        <th className="hidden md:table-cell">Varslur</th>
+                        <th className="hidden md:table-cell">Vörslur</th>
                         <th className="hidden lg:table-cell">Skot</th>
                         <th className="hidden lg:table-cell">Score</th>
                         <th className="text-right">Samtals</th>

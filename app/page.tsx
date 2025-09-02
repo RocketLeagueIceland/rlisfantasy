@@ -67,7 +67,7 @@ export default async function Page() {
           <ul className="mt-3 space-y-2 text-sm text-neutral-300">
             <li>⚡ <strong>Striker</strong> → tvöfalt fyrir <em>mörk</em>.</li>
             <li>🧭 <strong>Midfield</strong> → tvöfalt fyrir <em>stoðsendingar</em>.</li>
-            <li>🧱 <strong>Defense</strong> → tvöfalt fyrir <em>varslur</em>.</li>
+            <li>🧱 <strong>Defense</strong> → tvöfalt fyrir <em>Vörslur</em>.</li>
           </ul>
           <p className="mt-3 text-xs text-neutral-400">
             Þitt lið: 6 leikmenn (2× hver staða). Allt fellur undir Salary Cap.
@@ -106,7 +106,7 @@ export default async function Page() {
             <div className="text-2xl">📈</div>
             <h3 className="mt-2 font-medium">3) Safnaðu stigum</h3>
             <p className="text-sm text-neutral-300">
-              Mörk, stoðsendingar, varslur, skot og taflustig leggja öll saman.
+              Mörk, stoðsendingar, vörslur, skot og taflustig leggja öll saman.
             </p>
           </li>
         </ol>

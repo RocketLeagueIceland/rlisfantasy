@@ -47,7 +47,7 @@ export default async function HowToPlay() {
           <ul className="mt-2 text-sm text-neutral-300 space-y-1">
             <li>⚽ <strong>Striker</strong> → <span className="font-semibold">2×</span> stig fyrir <em>mörk</em>.</li>
             <li>🎯 <strong>Midfield</strong> → <span className="font-semibold">2×</span> stig fyrir <em>stoðsendingar</em>.</li>
-            <li>🧱 <strong>Defense</strong> → <span className="font-semibold">2×</span> stig fyrir <em>varslur</em>.</li>
+            <li>🧱 <strong>Defense</strong> → <span className="font-semibold">2×</span> stig fyrir <em>vörslur</em>.</li>
           </ul>
           <p className="mt-3 text-xs text-neutral-400">Stöðubónus er stilltur á <strong>2×</strong> sjálfgefið.</p>
         </div>
