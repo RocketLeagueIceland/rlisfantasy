@@ -434,7 +434,7 @@ export default async function Dashboard({
           <div className="flex flex-wrap items-center gap-2">
             {viewingOwn && (
               <span className="text-xs rounded-full border border-neutral-700 px-3 py-1 text-neutral-300">
-                Salary left: ${budgetLeft}
+                Salary left: {budgetLeft} kr
               </span>
             )}
             {lockedMarket && (

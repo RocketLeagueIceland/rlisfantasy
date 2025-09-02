@@ -23,7 +23,7 @@ export default function HowToPlay() {
           <li className="rounded-xl border border-neutral-800 p-4 bg-neutral-950/40">
             <div className="text-2xl">🛒</div>
             <h3 className="mt-2 font-medium">1) Veldu leikmenn</h3>
-            <p className="text-sm text-neutral-300">Kauptu allt að 6 leikmenn innan <strong>Salary Cap $9,000</strong>.</p>
+            <p className="text-sm text-neutral-300">Kauptu allt að 6 leikmenn innan <strong>Salary Cap 10000000 kr</strong>.</p>
           </li>
           <li className="rounded-xl border border-neutral-800 p-4 bg-neutral-950/40">
             <div className="text-2xl">📍</div>
@@ -62,7 +62,7 @@ export default function HowToPlay() {
         <div className="rounded-xl border border-neutral-800 p-4">
           <h3 className="font-medium">Launaþak & markaður</h3>
           <ul className="mt-2 text-sm text-neutral-300 space-y-1">
-            <li>💰 <strong>Salary Cap:</strong> $9,000</li>
+            <li>💰 <strong>Salary Cap:</strong> 10000000 kr</li>
             <li>🔄 Selurðu leikmann færðu <em>upphaflegt kaupverð</em> til baka.</li>
             <li>🔒 Markaður getur verið <em>læstur</em> á leikdögum.</li>
           </ul>
@@ -91,7 +91,7 @@ export default function HowToPlay() {
             </div>
             <div>
               <dt className="text-neutral-200">Hvenær get ég keypt/selt?</dt>
-              <dd className="text-neutral-400">Þegar markaður er opinn. Sé hann læstur sérðu gulann miða efst á síðunni.</dd>
+              <dd className="text-neutral-400">Þegar markaður er opinn. Markaðurinn er lokaður þegar .</dd>
             </div>
             <div>
               <dt className="text-neutral-200">Hvernig breytist verð?</dt>

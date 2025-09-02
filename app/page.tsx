@@ -14,7 +14,7 @@ export default function Page() {
             Byggðu draumalið, stilltu stöður og klifrar upp stigatöfluna.
           </h1>
           <p className="mt-4 text-neutral-300">
-            Veldu 6 leikmenn innan <span className="font-semibold">Salary Cap $9,000</span>.
+            Veldu 6 leikmenn innan <span className="font-semibold">Salary Cap 10.000.000 kr</span>.
             Settu þá í stöður á vellinum og safnaðu stigum fyrir frammistöðu þeirra í leikjum.
             Stöðubónus er <strong>2×</strong> fyrir tengdu tölfræðina.
           </p>
