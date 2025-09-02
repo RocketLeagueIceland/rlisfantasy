@@ -1,3 +1,6 @@
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 // app/api/market/sell/route.ts
 import { prisma } from '@/lib/prisma'
 import { getServerSession } from 'next-auth'

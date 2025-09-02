@@ -1,3 +1,6 @@
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 // app/page.tsx
 import Link from 'next/link'
 import { getServerSession } from 'next-auth'
