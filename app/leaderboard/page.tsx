@@ -5,8 +5,6 @@ export const revalidate = 0;
 import { prisma } from '@/lib/prisma'
 import Link from 'next/link'
 
-export const dynamic = 'force-dynamic'
-
 type SP = { week?: string | string[] }
 type PageProps = { searchParams: Promise<SP> }
 
