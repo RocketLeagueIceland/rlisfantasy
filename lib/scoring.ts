@@ -31,10 +31,9 @@ export function breakdownPoints(s: StatLine, role: RoleOnField | null | undefine
 
   let bonus = 0
   if (role && POSITION_BONUS_MULTIPLIER !== 1) {
-    const multDelta = POSITION_BONUS_MULTIPLIER - 1
-    if (role === 'STRIKER')  bonus = multDelta * (s.goals   ?? 0) * POINTS.goal
-    if (role === 'MIDFIELD') bonus = multDelta * (s.assists ?? 0) * POINTS.assist
-    if (role === 'DEFENSE')  bonus = multDelta * (s.saves   ?? 0) * POINTS.save
+    if (role === 'STRIKER')  bonus = (s.goals   ?? 0) * POINTS.goal
+    if (role === 'MIDFIELD') bonus = (s.assists ?? 0) * POINTS.assist
+    if (role === 'DEFENSE')  bonus = (s.saves   ?? 0) * POINTS.save
   }
 
   const total = g + a + sv + sh + sc + bonus
