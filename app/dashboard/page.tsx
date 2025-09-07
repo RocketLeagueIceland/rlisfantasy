@@ -30,16 +30,15 @@ async function getOpenWeek() {
 
 // points per stat including position bonus (matches computeWeekPointsFanRL)
 function statPointsWithBonus(stats: any, role: 'STRIKER'|'MIDFIELD'|'DEFENSE'|null|undefined) {
-  const mult = POSITION_BONUS_MULTIPLIER ?? 1
   const goals  = Number(stats?.goals  || 0)
   const assists= Number(stats?.assists|| 0)
   const saves  = Number(stats?.saves  || 0)
   const shots  = Number(stats?.shots  || 0)
   const score  = Number(stats?.score  || 0)
 
-  const goalPts   = goals   * POINTS.goal   * (role === 'STRIKER' ? mult : 1)
-  const assistPts = assists * POINTS.assist * (role === 'MIDFIELD' ? mult : 1)
-  const savePts   = saves   * POINTS.save   * (role === 'DEFENSE' ? mult : 1)
+  const goalPts   = goals   * POINTS.goal   * (role === 'STRIKER' ? 2 : 1)
+  const assistPts = assists * POINTS.assist * (role === 'MIDFIELD' ? 2 : 1)
+  const savePts   = saves   * POINTS.save   * (role === 'DEFENSE' ? 2 : 1)
   const shotPts   = shots   * POINTS.shot
   const scorePts  = score   * POINTS.score
 
