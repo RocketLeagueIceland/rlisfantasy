@@ -51,7 +51,6 @@ export async function POST(req: Request) {
     await prisma.$transaction(async (tx) => {
       await tx.team.update({ where: { id: team.id }, data: { budgetSpent: { decrement: tp.pricePaid } } })
       await tx.teamPlayer.delete({ where: { id: tp.id } })
-      if (week) await markTransferUsed(team.id, week.id, tx)
     })
 
     return NextResponse.json({ ok: true })
