@@ -34,7 +34,7 @@ async function getCurrentOpenWeek() {
     where: {
       isLocked: false,
       startDate: { lte: now },
-      unlockedAt: { gte: now }, // only during the open window
+      firstBroadcastAt: { gt: now }, // only during the open window
     },
     orderBy: { startDate: 'desc' },
   })
