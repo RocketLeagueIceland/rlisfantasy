@@ -28,6 +28,19 @@ async function getOpenWeek() {
   return prisma.week.findFirst({ where: { isLocked: false }, orderBy: { number: 'asc' } })
 }
 
+async function getCurrentOpenWeek() {
+  const now = new Date()
+  return prisma.week.findFirst({
+    where: {
+      isLocked: false,
+      startDate: { lte: now },
+      unlockedAt: { gte: now }, // only during the open window
+    },
+    orderBy: { startDate: 'desc' },
+  })
+}
+
+
 // points per stat including position bonus (matches computeWeekPointsFanRL)
 function statPointsWithBonus(stats: any, role: 'STRIKER'|'MIDFIELD'|'DEFENSE'|null|undefined) {
   const goals  = Number(stats?.goals  || 0)
@@ -158,7 +171,7 @@ export async function buyAction(...args: any[]) {
   // -----------------------------
   // POST-LOCK: exactly ONE weekly transfer
   // -----------------------------
-  const openWeek = await getOpenWeek()
+  const openWeek = await getCurrentOpenWeek()
   if (!openWeek) return { ok: false, error: 'Markaður er læstur.' }
 
   // Already used transfer this week?
@@ -282,7 +295,7 @@ export default async function Dashboard({
   if (!team) return <div>Lið fannst ekki.</div>
 
   const viewingOwn = !!team && team.userId === myUserId
-  const openWeek = await getOpenWeek()
+  const openWeek = await getCurrentOpenWeek()
   const lockedMarket = !openWeek
 
   // If viewing own, load market list; otherwise, skip
